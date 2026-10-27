@@ -2,16 +2,26 @@
 
 :root {
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-  color: #19352e;
-  background:
-    radial-gradient(ellipse at 92% 12%, rgba(119, 190, 157, 0.2), transparent 34%),
-    linear-gradient(135deg, #f4f7f2 0%, #e7f0e9 100%);
+  color: #30475c;
+  background: #f7fafb;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+}
+
+summary {
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
 }
