@@ -23,8 +23,8 @@ export default function BenefitsSection() {
     <section id="our-story" className="scroll-mt-24 bg-[linear-gradient(110deg,#eaf3f6_0%,#dcebf1_100%)]">
       <div className="mx-auto max-w-7xl px-5 py-12 sm:px-8 sm:py-14 lg:px-12 lg:py-16">
         <div className="mb-8 flex items-end justify-between gap-4">
-          <h2 className="text-2xl font-medium tracking-[-0.04em] text-[#30475c] sm:text-3xl">Why people come back</h2>
-          <span className="pb-1 text-[9px] font-medium uppercase tracking-[0.12em] text-[#637b89]">Good fish. Honest advice.</span>
+          <h2 className="font-display text-3xl font-medium tracking-[-0.035em] text-[#30475c] sm:text-4xl">Why people come back</h2>
+          <span className="rounded-full border border-white/80 bg-white/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#557486]">Good fish. Honest advice.</span>
         </div>
         <div className="grid gap-8 sm:grid-cols-3 sm:gap-6 lg:gap-10">
           {benefits.map((benefit) => (
@@ -32,8 +32,8 @@ export default function BenefitsSection() {
               <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/80 bg-white/80 text-[#496377]">
                 <Icon name={benefit.icon} className="h-4 w-4" />
               </span>
-              <h3 className="mt-4 text-sm font-medium text-[#30475c]">{benefit.title}</h3>
-              <p className="mt-2 max-w-sm text-xs leading-5 text-[#657b89]">{benefit.description}</p>
+              <h3 className="mt-4 text-base font-semibold text-[#30475c]">{benefit.title}</h3>
+              <p className="mt-2 max-w-sm text-sm leading-6 text-[#5f7685]">{benefit.description}</p>
             </article>
           ))}
         </div>

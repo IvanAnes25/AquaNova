@@ -10,26 +10,26 @@ export default function SiteFooter() {
               <Icon name="location" className="h-4 w-4" />
               Aquatica
             </a>
-            <p className="mt-2 max-w-xs text-xs leading-5 text-[#71838f]">Your neighbourhood fish & aquarium shop. A little care goes a long way.</p>
+            <p className="mt-2 max-w-xs text-sm leading-6 text-[#657b89]">Your neighbourhood fish & aquarium shop. A little care goes a long way.</p>
           </div>
 
           <div>
-            <h2 className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#81909a]">Explore</h2>
-            <a className="mt-2 block text-xs text-[#53697b] transition hover:text-[#203b52]" href="#categories">Shop the fish</a>
-            <a className="mt-1.5 block text-xs text-[#53697b] transition hover:text-[#203b52]" href="#categories">Tanks & equipment</a>
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#617b8a]">Explore</h2>
+            <a className="mt-2 block text-sm text-[#53697b] transition hover:text-[#203b52]" href="#categories">Shop the fish</a>
+            <a className="mt-1.5 block text-sm text-[#53697b] transition hover:text-[#203b52]" href="#categories">Tanks & equipment</a>
           </div>
 
           <div>
-            <h2 className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#81909a]">Your Aquatica</h2>
-            <a className="mt-2 block text-xs text-[#53697b] transition hover:text-[#203b52]" href="#login">Log in</a>
-            <a className="mt-1.5 block text-xs text-[#53697b] transition hover:text-[#203b52]" href="#login">My orders</a>
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#617b8a]">Your Aquatica</h2>
+            <a className="mt-2 block text-sm text-[#53697b] transition hover:text-[#203b52]" href="#login">Log in</a>
+            <a className="mt-1.5 block text-sm text-[#53697b] transition hover:text-[#203b52]" href="#login">My orders</a>
           </div>
 
           <div id="visit-us" className="scroll-mt-24">
-            <h2 className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#81909a]">Come say hello</h2>
-            <p className="mt-2 text-xs text-[#53697b]">Nasugbu, Batangas</p>
-            <p className="mt-1.5 text-xs leading-5 text-[#71838f]">Open through your account. Pick up at the shop.</p>
-            <p className="mt-1.5 text-xs leading-5 text-[#71838f]">Mon–Sat, 7:00 AM–5:00 PM · Sunday closed</p>
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#617b8a]">Come say hello</h2>
+            <p className="mt-2 text-sm text-[#53697b]">Nasugbu, Batangas</p>
+            <p className="mt-1.5 text-sm leading-6 text-[#657b89]">Open through your account. Pick up at the shop.</p>
+            <p className="mt-1.5 text-sm leading-6 text-[#657b89]">Mon–Sat, 7:00 AM–5:00 PM · Sunday closed</p>
           </div>
         </div>
 

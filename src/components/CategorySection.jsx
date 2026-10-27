@@ -45,15 +45,15 @@ export default function CategorySection() {
       <div className="mx-auto max-w-7xl px-5 py-14 sm:px-8 sm:py-16 lg:px-12 lg:py-20">
         <div className="mb-7 flex flex-wrap items-end justify-between gap-5">
           <div>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.16em] text-[#82929c]">Find your freshwater favourites</p>
-            <h2 className="text-2xl font-medium tracking-[-0.04em] text-[#30475c] sm:text-3xl">Start with what you’re building</h2>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#688395]">Find your freshwater favourites</p>
+            <h2 className="font-display text-3xl font-medium tracking-[-0.035em] text-[#30475c] sm:text-4xl">Start with what you’re building</h2>
           </div>
-          <p className="max-w-xs text-xs leading-5 text-[#768792]">A first fish, a planted tank, or a fresh start. There’s a good place to begin.</p>
+          <p className="max-w-xs text-sm leading-6 text-[#687d8a]">A first fish, a planted tank, or a fresh start. There’s a good place to begin.</p>
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 sm:gap-x-5 sm:gap-y-8">
           {categories.map((category) => (
-            <a className="group min-w-0" href="#contact" key={category.name}>
+            <a className="category-card group min-w-0" href="#contact" key={category.name}>
               <div className="relative aspect-[1.55] overflow-hidden rounded-2xl bg-[#e2edf0]">
                 <img
                   alt={category.alt}
@@ -64,8 +64,8 @@ export default function CategorySection() {
               </div>
               <div className="mt-2 flex items-center justify-between gap-2">
                 <span>
-                  <span className="block text-sm font-medium text-[#30475c]">{category.name}</span>
-                  <span className="mt-0.5 block text-[10px] text-[#7b8b95]">{category.detail}</span>
+                  <span className="block text-base font-semibold text-[#30475c]">{category.name}</span>
+                  <span className="mt-0.5 block text-xs text-[#6c808d]">{category.detail}</span>
                 </span>
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#d8e2e7] text-[#536b7d] transition group-hover:border-[#30475c] group-hover:bg-[#30475c] group-hover:text-white">
                   <Icon name="arrow" className="h-3.5 w-3.5" />

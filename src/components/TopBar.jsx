@@ -23,26 +23,26 @@ export default function TopBar() {
   }, []);
 
   return (
-    <div className="border-b border-[#dce6eb] bg-[#eef5f7]">
-      <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-5 py-2 text-[11px] sm:flex-row sm:px-8 lg:px-12">
-        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[#53697b] sm:justify-start">
-          <a className="inline-flex items-center gap-1.5 transition hover:text-[#203b52]" href="#visit-us">
-            <Icon name="location" className="h-3.5 w-3.5" />
+    <div className="site-topbar border-b border-white/15 bg-slate-950/25 text-white backdrop-blur-md">
+      <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1 px-3 py-1.5 text-[9px] leading-[1.15] text-white/90 sm:flex-row sm:gap-2 sm:px-8 sm:py-2 sm:text-xs sm:leading-4 lg:px-12">
+        <div className="site-topbar-content flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 sm:justify-start sm:gap-x-3 sm:gap-y-1">
+          <a className="inline-flex items-center gap-1 transition hover:text-[#203b52] sm:gap-1.5" href="#visit-us">
+            <Icon name="location" className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
             Nasugbu, Batangas
           </a>
           <span className="hidden text-[#b1c0c8] sm:inline" aria-hidden="true">|</span>
           <span>Opening hours: Mon–Sat 7:00 AM–5:00 PM, Sun closed</span>
           <span
-            className={`inline-flex items-center gap-1.5 font-medium ${open ? 'text-[#26794e]' : 'text-[#71808a]'}`}
+            className={`inline-flex items-center gap-1 font-medium sm:gap-1.5 ${open ? 'text-emerald-200' : 'text-white/70'}`}
             role="status"
             aria-live="polite"
           >
-            <span className={`h-1.5 w-1.5 rounded-full ${open ? 'bg-[#36a86d]' : 'bg-[#9aa8b0]'}`} />
+            <span className={`h-1.5 w-1.5 rounded-full ${open ? 'bg-emerald-300' : 'bg-white/60'}`} />
             {open ? 'Open now' : 'Closed now'}
           </span>
         </div>
 
-        <div className="flex items-center gap-3 text-[#53697b]">
+        <div className="site-topbar-social flex items-center gap-3 text-white/90">
           <span className="hidden sm:inline">Follow along</span>
           <a className="rounded-full transition hover:text-[#203b52]" href="https://www.instagram.com/" target="_blank" rel="noreferrer" aria-label="Visit us on Instagram">
             <Icon name="instagram" className="h-4 w-4" />
