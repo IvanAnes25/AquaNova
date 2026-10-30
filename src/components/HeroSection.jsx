@@ -13,11 +13,7 @@ export default function HeroSection() {
       <div className="home-hero-overlay" />
       <div className="home-hero-inner">
         <div className="home-hero-content">
-          <p className="home-hero-eyebrow">
-            <span className="home-hero-eyebrow-dot" />
-            YOUR NEIGHBOURHOOD AQUARIUM SHOP
-          </p>
-          <h1 className="font-display">
+          <h1>
             Find your <span>little piece</span>
             <br className="hidden sm:block" />
             of the underwater world.
@@ -37,19 +33,38 @@ export default function HeroSection() {
           </div>
         </div>
 
-        <div className="home-hero-details">
-          <div>
-            <Icon name="location" className="h-4 w-4" />
-            <span>YOUR LOCAL FISH SHOP</span>
-          </div>
-          <span className="home-hero-detail-divider" />
-          <div>
-            <span className="home-hero-open-dot" />
-            <span>FRIENDLY ADVICE, IN STORE</span>
-          </div>
-          <span className="home-hero-detail-divider" />
-          <div>
-            <span>NASUGBU, BATANGAS</span>
+        <div className="home-hero-details-viewport">
+          <div className="home-hero-details">
+            <div className="home-hero-details-group">
+              <div>
+                <Icon name="location" className="h-4 w-4" />
+                <span>YOUR LOCAL FISH SHOP</span>
+              </div>
+              <span className="home-hero-detail-divider" />
+              <div>
+                <span className="home-hero-open-dot" />
+                <span>FRIENDLY ADVICE, IN STORE</span>
+              </div>
+              <span className="home-hero-detail-divider" />
+              <div>
+                <span>NASUGBU, BATANGAS</span>
+              </div>
+            </div>
+            <div className="home-hero-details-group" aria-hidden="true">
+              <div>
+                <Icon name="location" className="h-4 w-4" />
+                <span>YOUR LOCAL FISH SHOP</span>
+              </div>
+              <span className="home-hero-detail-divider" />
+              <div>
+                <span className="home-hero-open-dot" />
+                <span>FRIENDLY ADVICE, IN STORE</span>
+              </div>
+              <span className="home-hero-detail-divider" />
+              <div>
+                <span>NASUGBU, BATANGAS</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
