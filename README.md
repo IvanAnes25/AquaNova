@@ -21,6 +21,10 @@ Run `npm run build` whenever you want to test the production version, then open 
 
 The sample endpoint is `http://localhost/AquaNova/api/health.php`. Add backend endpoints as plain `.php` files in `api/`; no PHP framework or Composer dependency is used.
 
+## Deploy the frontend to Vercel
+
+Vercel builds and serves the React frontend from `public/` using `vercel.json`. The PHP endpoints in `api/` and the `index.php` entry point require a PHP-capable host and are not served by this Vercel deployment.
+
 ## Team workflow
 
 Share the source files and `package-lock.json` in Git. Each teammate runs `npm install` after cloning. Do not commit `node_modules/` or the generated `public/` build. Agree on endpoint paths and JSON request/response shapes before splitting frontend and PHP tasks.
