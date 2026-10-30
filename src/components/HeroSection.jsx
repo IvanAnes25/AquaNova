@@ -23,7 +23,7 @@ export default function HeroSection() {
           </p>
 
           <div className="home-hero-actions">
-            <a className="home-hero-primary" href="#categories">
+            <a className="home-hero-primary" href="#shop">
               Find your next favourite
               <Icon name="arrow" className="h-4 w-4" />
             </a>

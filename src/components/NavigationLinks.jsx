@@ -24,7 +24,7 @@ export default function NavigationLinks({ mobile = false, onNavigate }) {
   return (
     <>
       <a className={getLinkClass('#top', baseLinkClass)} href="#top" onClick={onNavigate} aria-current={currentHash === '#top' ? 'page' : undefined}>Home</a>
-      <a className={getLinkClass('#categories', baseLinkClass)} href="#categories" onClick={onNavigate} aria-current={currentHash === '#categories' ? 'page' : undefined}>Shop</a>
+      <a className={getLinkClass('#shop', baseLinkClass)} href="#shop" onClick={onNavigate} aria-current={currentHash === '#shop' ? 'page' : undefined}>Shop</a>
       <a className={getLinkClass('#care-guides', baseLinkClass)} href="#care-guides" onClick={onNavigate} aria-current={currentHash === '#care-guides' ? 'page' : undefined}>Care guides</a>
       <details className={`group ${mobile ? 'rounded-xl border border-[#e2eaee] px-4 py-3' : 'relative'}`}>
         <summary
