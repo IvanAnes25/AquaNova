@@ -29,39 +29,55 @@
 }
 
 .auth-card-register .auth-brand {
-  margin-bottom: 1rem;
+  margin-bottom: 1.25rem;
 }
 
 .auth-card-register .auth-brand img {
-  width: 2.6rem;
-  height: 2.6rem;
+  width: 2.4rem;
+  height: 2.4rem;
 }
 
 .auth-card-register .auth-heading {
-  margin-bottom: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.auth-card-register .auth-heading h1 {
+  font-size: 1.8rem;
+}
+
+.auth-card-register .auth-heading p {
+  font-size: 0.92rem;
 }
 
 .auth-register-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: 1rem;
+  row-gap: 0.35rem;
 }
 
 .auth-register-form .auth-field {
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.auth-register-form .auth-field label {
+  font-size: 0.83rem;
 }
 
 .auth-register-form .auth-field input {
   min-height: 2.7rem;
   padding-block: 0.6rem;
+  font-size: 0.92rem;
 }
 
 .auth-register-form .auth-primary {
   margin-top: 0.25rem;
+  font-size: 0.94rem;
 }
 
 .auth-register-form .auth-switch {
   margin: 0.85rem 0 0;
+  font-size: 0.9rem;
 }
 
 .auth-close {
@@ -92,8 +108,8 @@
 }
 
 .auth-brand img {
-  width: 3.25rem;
-  height: 3.25rem;
+  width: 2.9rem;
+  height: 2.9rem;
   border-radius: 50%;
   object-fit: cover;
 }
@@ -109,6 +125,14 @@
   font-family: Georgia, "Times New Roman", serif;
   font-size: 2rem;
   font-weight: 500;
+}
+
+.auth-form:not(.auth-register-form) .auth-heading {
+  margin-bottom: 1.1rem;
+}
+
+.auth-form:not(.auth-register-form) .auth-heading h1 {
+  font-size: 1.65rem;
 }
 
 .auth-heading p {
@@ -140,6 +164,11 @@
   font: inherit;
 }
 
+.auth-form:not(.auth-register-form) .auth-field input {
+  min-height: 2.7rem;
+  padding-block: 0.6rem;
+}
+
 .auth-field input:focus {
   border-color: #327da4;
   outline: 3px solid rgb(50 125 164 / 18%);
@@ -164,7 +193,7 @@
   margin-top: 0.5rem;
   border: 0;
   border-radius: 999px;
-  background: #145579;
+  background: #104665;
   color: #fff;
   cursor: pointer;
   font: inherit;
@@ -174,7 +203,7 @@
 
 .auth-primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  background: #0e4568;
+  background: #0b3852;
 }
 
 .auth-primary:disabled {
@@ -192,7 +221,7 @@
 .auth-back-link {
   border: 0;
   background: transparent;
-  color: #145579;
+  color: #104665;
   cursor: pointer;
   font: inherit;
   font-weight: 700;
@@ -228,19 +257,24 @@
   }
 
   .auth-register-form .auth-field {
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.55rem;
   }
 
   .auth-register-grid {
     column-gap: 0.65rem;
+    row-gap: 0.25rem;
   }
 
   .auth-card-register .auth-brand {
-    margin-bottom: 0.65rem;
+    margin-bottom: 0.9rem;
   }
 
   .auth-card-register .auth-heading {
-    margin-bottom: 0.7rem;
+    margin-bottom: 1rem;
+  }
+
+  .auth-card-register .auth-heading h1 {
+    font-size: 1.65rem;
   }
 
   .auth-register-form .auth-field label {

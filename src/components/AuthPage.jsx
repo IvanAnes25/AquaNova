@@ -95,7 +95,6 @@ function AuthPage({ onClose }) {
           <form className="auth-form" onSubmit={handleLogin}>
             <header className="auth-heading">
               <h1>Log in</h1>
-              <p>Welcome back to AquaNova.</p>
             </header>
             {message && <p className="auth-message" role="status">{message}</p>}
             <AuthField
@@ -123,7 +122,7 @@ function AuthPage({ onClose }) {
             </div>
             <button className="auth-primary" type="submit">Log in</button>
             <p className="auth-switch">
-              New to AquaNova?{' '}
+              New here?{' '}
               <button className="auth-text-button" onClick={() => switchView('register')} type="button">Create account</button>
             </p>
           </form>
@@ -131,7 +130,7 @@ function AuthPage({ onClose }) {
           <form className="auth-form auth-register-form" onSubmit={handleRegister}>
             <header className="auth-heading">
               <h1>Create account</h1>
-              <p>Make an account to continue to the web app.</p>
+              <p>Create an account to log in and start a transaction in the web app.</p>
             </header>
             {message && <p className="auth-message" role="alert">{message}</p>}
             <div className="auth-register-grid">
