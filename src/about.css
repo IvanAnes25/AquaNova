@@ -628,7 +628,7 @@
   display: grid;
   grid-template-columns: 1.2fr 0.8fr;
   gap: 1rem;
-  margin-top: 1.8rem;
+  margin-top: 2.25rem;
 }
 
 .about-shop-photos figure {
@@ -682,20 +682,22 @@
 .about-faq-topics button {
   min-height: 2.65rem;
   border: 0;
-  border-bottom: 2px solid transparent;
   background: transparent;
   padding: 0.5rem 0.3rem;
   color: var(--about-copy);
   cursor: pointer;
   font: inherit;
   font-size: 0.9rem;
-  transition: color 220ms ease, border-color 220ms ease;
+  transition: color 220ms ease, font-weight 220ms ease;
 }
 
 .about-faq-topics button:hover,
 .about-faq-topics button.is-active {
-  border-bottom-color: var(--about-blue);
   color: #fff;
+}
+
+.about-faq-topics button.is-active {
+  font-weight: 700;
 }
 
 .about-faq-list {
@@ -1128,7 +1130,7 @@
   .about-shop-photos {
     grid-template-columns: 1fr;
     gap: 0.7rem;
-    margin-top: 1.2rem;
+    margin-top: 1.6rem;
   }
 
   .about-shop-photos img {

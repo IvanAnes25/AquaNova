@@ -133,8 +133,6 @@ function CareImage({ alt, className = '' }) {
 
 function CustomerCarousel() {
   const [activeIndex, setActiveIndex] = useState(0);
-  const [isHovered, setIsHovered] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(
     () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
   );
@@ -150,14 +148,14 @@ function CustomerCarousel() {
   }, []);
 
   useEffect(() => {
-    if (isHovered || isFocused || prefersReducedMotion) return undefined;
+    if (prefersReducedMotion) return undefined;
 
     const timer = window.setInterval(() => {
       setActiveIndex((current) => (current + 1) % customerPhotos.length);
     }, 4000);
 
     return () => window.clearInterval(timer);
-  }, [isFocused, isHovered, prefersReducedMotion]);
+  }, [prefersReducedMotion]);
 
   function moveSlide(direction) {
     setActiveIndex((current) => (current + direction + customerPhotos.length) % customerPhotos.length);
@@ -202,19 +200,13 @@ function CustomerCarousel() {
           aria-roledescription="carousel"
           className="about-customer-carousel"
           onKeyDown={handleKeyDown}
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
           onPointerCancel={() => { pointerStart.current = null; }}
           onPointerDown={(event) => { pointerStart.current = event.clientX; }}
           onPointerUp={handlePointerUp}
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) setIsFocused(false);
-          }}
-          onFocus={() => setIsFocused(true)}
           role="region"
           tabIndex={0}
         >
-          <p aria-live={isFocused ? 'polite' : 'off'} className="about-carousel-status">
+          <p aria-live="off" className="about-carousel-status">
             Showing customer photo {activeIndex + 1} of {customerPhotos.length}
           </p>
           <button
