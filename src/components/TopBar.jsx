@@ -29,11 +29,6 @@ export default function TopBar() {
     >
       <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1 px-3 py-1.5 text-[9px] leading-[1.15] text-white/90 sm:flex-row sm:gap-2 sm:px-8 sm:py-2 sm:text-xs sm:leading-4 lg:px-12">
         <div className="site-topbar-content flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 sm:justify-start sm:gap-x-3 sm:gap-y-1">
-          <a className="inline-flex items-center gap-1 transition hover:text-[#203b52] sm:gap-1.5" href="#visit-us">
-            <Icon name="location" className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
-            Nasugbu, Batangas
-          </a>
-          <span className="hidden text-[#b1c0c8] sm:inline" aria-hidden="true">|</span>
           <span>Opening hours: Mon–Sat 7:00 AM–5:00 PM, Sun closed</span>
           <span
             className={`inline-flex items-center gap-1 font-medium sm:gap-1.5 ${open ? 'text-emerald-200' : 'text-white/70'}`}

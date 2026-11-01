@@ -83,7 +83,7 @@ summary::-webkit-details-marker {
   border-right: 0;
   border-bottom: 1px solid rgb(255 255 255 / 24%);
   border-left: 0;
-  border-radius: 0;
+  border-radius: 0 0 1.15rem 1.15rem;
   background: rgb(14 35 48 / 88%);
   box-shadow: 0 8px 26px rgb(6 23 32 / 22%);
 }
@@ -95,7 +95,7 @@ summary::-webkit-details-marker {
   border: 0;
   border-top: 1px solid rgb(255 255 255 / 24%);
   border-bottom: 1px solid rgb(255 255 255 / 24%);
-  border-radius: 0;
+  border-radius: 999px;
   background: rgb(14 35 48 / 38%);
   color: white;
   box-shadow: 0 10px 40px rgb(6 23 32 / 12%);
