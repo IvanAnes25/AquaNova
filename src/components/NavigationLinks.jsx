@@ -6,7 +6,7 @@ export default function NavigationLinks({ mobile = false, onNavigate }) {
   const baseLinkClass = mobile
     ? 'site-mobile-link block rounded-xl px-4 py-3 text-base font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white'
     : 'site-nav-link rounded-full px-3 py-2 text-sm transition';
-  const aboutHashes = ['#our-story', '#visit-us', '#faq'];
+  const aboutHashes = ['#our-story', '#visit-us', '#faq', '#contact'];
 
   useEffect(() => {
     function updateCurrentHash() {
@@ -47,7 +47,7 @@ export default function NavigationLinks({ mobile = false, onNavigate }) {
           <a className={getLinkClass('#faq', mobile ? 'site-mobile-sublink rounded-lg px-3 py-2.5 text-sm transition' : 'site-dropdown-link block rounded-lg px-3 py-2 transition')} href="#faq" onClick={onNavigate} aria-current={currentHash === '#faq' ? 'page' : undefined}>FAQ</a>
         </div>
       </details>
-      <a className={getLinkClass('#visit-us', baseLinkClass)} href="#visit-us" onClick={onNavigate} aria-current={currentHash === '#visit-us' ? 'page' : undefined}>Contact</a>
+      <a className={getLinkClass('#contact', baseLinkClass)} href="#contact" onClick={onNavigate} aria-current={currentHash === '#contact' ? 'page' : undefined}>Contact</a>
     </>
   );
 }

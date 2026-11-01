@@ -459,8 +459,83 @@ function Faq() {
             <h3>Didn’t find your answer?</h3>
             <p>Get in touch and tell us what you are trying to figure out.</p>
           </div>
-          <a href="#visit-us">Talk to the shop <Icon name="arrow" className="h-4 w-4" /></a>
+          <a href="#contact">Talk to the shop <Icon name="arrow" className="h-4 w-4" /></a>
         </aside>
+      </div>
+    </section>
+  );
+}
+
+function ContactUs() {
+  const [status, setStatus] = useState(null);
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    setStatus('This contact form is a preview and does not send messages yet. Please email us directly at anesivan21@gmail.com.');
+  }
+
+  return (
+    <section aria-labelledby="contact-title" className="about-contact" id="contact">
+      <div className="about-container">
+        <div className="about-contact-layout">
+          <div className="about-contact-intro about-reveal">
+            <header className="about-contact-heading">
+              <h2 id="contact-title">Let’s talk fish.</h2>
+              <p>Questions about an aquarium, a fish, or a visit? We’d be glad to hear from you.</p>
+            </header>
+
+            <div aria-label="Shop information" className="about-contact-details">
+              <article>
+                <Icon name="mail" className="h-5 w-5" />
+                <div>
+                  <h3>Write to us</h3>
+                  <a href="mailto:anesivan21@gmail.com">anesivan21@gmail.com</a>
+                </div>
+              </article>
+              <article>
+                <Icon name="location" className="h-5 w-5" />
+                <div>
+                  <h3>Come visit</h3>
+                  <a href={directionsUrl} rel="noreferrer" target="_blank">
+                    Nasugbu, Batangas <Icon name="arrow" className="h-4 w-4" />
+                  </a>
+                </div>
+              </article>
+              <article>
+                <Icon name="clock" className="h-5 w-5" />
+                <div>
+                  <h3>When we’re open</h3>
+                  <p>Monday–Saturday, 7:00 AM–5:00 PM<br />Sunday, closed</p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <form className="about-contact-form about-contact-panel about-reveal" onSubmit={handleSubmit}>
+            <h3>Send us a message</h3>
+            <div className="about-contact-fields">
+              <label>
+                <span>Name</span>
+                <input autoComplete="name" maxLength="120" name="name" placeholder="Your name" required />
+              </label>
+              <label>
+                <span>Email</span>
+                <input autoComplete="email" maxLength="254" name="email" placeholder="you@example.com" required type="email" />
+              </label>
+            </div>
+            <label className="about-contact-message">
+              <span>Message</span>
+              <textarea maxLength="5000" name="message" placeholder="What would you like to ask?" required rows="3" />
+            </label>
+            <div className="about-contact-submit">
+              <button type="submit">
+                Submit message
+                <Icon name="arrow" className="h-4 w-4" />
+              </button>
+              {status && <p aria-live="polite" className="about-contact-status" role="status">{status}</p>}
+            </div>
+          </form>
+        </div>
       </div>
     </section>
   );
@@ -497,6 +572,7 @@ export default function AboutUs() {
       <CustomerCarousel />
       <VisitUs />
       <Faq />
+      <ContactUs />
     </div>
   );
 }
