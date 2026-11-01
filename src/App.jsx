@@ -2,6 +2,7 @@ import TopBar from './components/TopBar.jsx';
 import SiteHeader from './components/SiteHeader.jsx';
 import HeroSection from './components/HeroSection.jsx';
 import ShopSection from './components/ShopSection.jsx';
+import AboutUs from './components/AboutUs.jsx';
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
       <main>
         <HeroSection />
         <ShopSection />
+        <AboutUs />
       </main>
     </div>
   );

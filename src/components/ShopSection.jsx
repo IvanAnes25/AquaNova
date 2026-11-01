@@ -130,16 +130,11 @@ export default function ShopSection() {
     return products.filter((product) => category === 'All' || product.category === category);
   }, [category]);
 
-  function clearFilters() {
-    setCategory('All');
-  }
-
   return (
     <section aria-labelledby="store-title" className="store-section" id="shop">
       <div className="store-container">
         <header className="store-heading">
           <div>
-            <p className="store-eyebrow">Aquatica · Nasugbu</p>
             <h2 id="store-title">The shop</h2>
           </div>
           <p>Freshwater fish and aquarium essentials for the little world you’re building.</p>
@@ -163,10 +158,6 @@ export default function ShopSection() {
                 ))}
               </div>
             </div>
-
-            {category !== 'All' && (
-              <button className="store-clear-filters" onClick={clearFilters} type="button">Clear filters</button>
-            )}
           </aside>
 
           <div className="store-results">
@@ -193,8 +184,7 @@ export default function ShopSection() {
             ) : (
               <div className="store-empty">
                 <h3>No matching products</h3>
-                <p>Try a different category or clear your filters.</p>
-                <button onClick={clearFilters} type="button">Clear filters</button>
+                <p>Try choosing a different category.</p>
               </div>
             )}
 

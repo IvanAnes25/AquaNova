@@ -79,10 +79,11 @@ summary::-webkit-details-marker {
 
 .site-header-scrolled .site-header-panel {
   width: 100%;
-  border-top: 0;
+  border-top: 1px solid rgb(255 255 255 / 24%);
   border-right: 0;
+  border-bottom: 1px solid rgb(255 255 255 / 24%);
   border-left: 0;
-  border-radius: 0 0 1.15rem 1.15rem;
+  border-radius: 0;
   background: rgb(14 35 48 / 88%);
   box-shadow: 0 8px 26px rgb(6 23 32 / 22%);
 }
@@ -91,8 +92,10 @@ summary::-webkit-details-marker {
   position: relative;
   width: min(calc(100% - 2rem), 80rem);
   font-family: "Manrope", "DM Sans", sans-serif;
-  border: 1px solid rgb(255 255 255 / 24%);
-  border-radius: 999px;
+  border: 0;
+  border-top: 1px solid rgb(255 255 255 / 24%);
+  border-bottom: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 0;
   background: rgb(14 35 48 / 38%);
   color: white;
   box-shadow: 0 10px 40px rgb(6 23 32 / 12%);
@@ -678,7 +681,7 @@ summary::-webkit-details-marker {
   .site-header-panel {
     width: min(calc(100% - 4rem), 100rem);
     max-width: 100rem;
-    padding: 1rem 2.5rem;
+    padding: 0.5rem 2.5rem;
   }
 
   .site-brand {
@@ -687,8 +690,8 @@ summary::-webkit-details-marker {
   }
 
   .site-brand-logo {
-    width: 3.25rem;
-    height: 3.25rem;
+    width: 2.5rem;
+    height: 2.5rem;
   }
 
   .site-desktop-navigation {
@@ -794,18 +797,18 @@ summary::-webkit-details-marker {
 .store-heading h2 {
   margin: 0;
   color: var(--store-ink);
-  font-family: "Lora", Georgia, serif;
-  font-size: clamp(2.25rem, 4vw, 3.15rem);
-  font-weight: 400;
-  letter-spacing: -0.035em;
-  line-height: 1.08;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: clamp(2rem, 3.2vw, 2.65rem);
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.2;
 }
 
 .store-heading > p {
   max-width: 21rem;
   margin: 0 0 0.2rem;
   color: var(--store-copy);
-  font-size: 0.88rem;
+  font-size: 1rem;
   font-weight: 500;
   line-height: 1.7;
 }
@@ -831,7 +834,7 @@ summary::-webkit-details-marker {
 .store-filter-group h3 {
   margin: 0;
   color: var(--store-ink);
-  font-size: 0.8rem;
+  font-size: 1rem;
   font-weight: 700;
 }
 
@@ -852,12 +855,11 @@ summary::-webkit-details-marker {
   color: var(--store-copy);
   cursor: pointer;
   font: inherit;
-  font-size: 0.77rem;
+  font-size: 0.9rem;
   text-align: left;
 }
 
-.store-category-list button:hover,
-.store-category-list button.is-active {
+.store-category-list button:hover {
   color: var(--store-accent);
 }
 
@@ -865,23 +867,10 @@ summary::-webkit-details-marker {
   font-weight: 700;
 }
 
-.store-clear-filters {
-  justify-self: start;
-  border: 0;
-  border-bottom: 1px solid var(--store-accent);
-  background: transparent;
-  padding: 0 0 0.2rem;
-  color: var(--store-accent);
-  font-weight: 600;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.73rem;
-}
-
 .store-result-count {
   margin: 1.3rem 0 1rem;
   color: var(--store-copy);
-  font-size: 0.7rem;
+  font-size: 0.9rem;
   font-weight: 600;
 }
 
@@ -929,14 +918,16 @@ summary::-webkit-details-marker {
 
 .store-product-action {
   position: absolute;
-  right: 0.7rem;
-  bottom: 0.7rem;
-  background: #fff;
-  padding: 0.55rem 0.8rem;
-  color: var(--store-ink);
-  font-size: 0.68rem;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(transparent, rgb(15 34 46 / 72%));
+  padding: 2rem 0.85rem 0.7rem;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
   opacity: 0;
-  transform: translateY(0.45rem);
+  transform: translateY(0.25rem);
   transition: opacity 240ms ease, transform 320ms cubic-bezier(0.2, 0.65, 0.3, 1);
 }
 
@@ -998,7 +989,6 @@ summary::-webkit-details-marker {
   font-size: 0.78rem;
 }
 
-.store-empty button,
 .store-dialog-return {
   min-height: 2.7rem;
   border: 1px solid var(--store-ink);
@@ -1153,7 +1143,7 @@ summary::-webkit-details-marker {
   }
 
   .store-heading > p {
-    font-size: 0.8rem;
+    font-size: 0.95rem;
   }
 
   .store-layout {
@@ -1181,11 +1171,12 @@ summary::-webkit-details-marker {
 
   .store-category-list button {
     flex: 0 0 auto;
-    min-height: 2rem;
+    min-height: 2.4rem;
     justify-content: center;
-    border: 1px solid #e4e6e1;
-    padding: 0 0.7rem;
-    font-size: 0.69rem;
+    border: 0;
+    background: transparent;
+    padding: 0 0.55rem;
+    font-size: 0.88rem;
   }
 
   .store-product-grid {
@@ -1205,10 +1196,8 @@ summary::-webkit-details-marker {
   }
 
   .store-product-action {
-    right: 0.45rem;
-    bottom: 0.45rem;
-    padding: 0.45rem 0.6rem;
-    font-size: 0.62rem;
+    padding: 1.6rem 0.65rem 0.55rem;
+    font-size: 0.75rem;
     opacity: 1;
     transform: none;
   }

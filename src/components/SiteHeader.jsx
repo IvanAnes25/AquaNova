@@ -34,7 +34,7 @@ export default function SiteHeader() {
 
   return (
     <header className={`site-header z-30 ${isScrolled ? 'site-header-scrolled' : ''}`}>
-      <div className="site-header-panel mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-3.5 sm:px-8 lg:px-12">
+      <div className="site-header-panel mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-2 sm:px-8 lg:px-12">
         <a href="#top" onClick={closeMenu} className="site-brand flex shrink-0 items-center gap-2.5 text-xl font-semibold tracking-[-0.04em]" aria-label="Nasugbu Aquatica home">
           <img className="site-brand-logo" src={logoImage} alt="" />
           <span>Nasugbu Aquatica</span>

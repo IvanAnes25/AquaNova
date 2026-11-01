@@ -25,7 +25,6 @@ export default function NavigationLinks({ mobile = false, onNavigate }) {
     <>
       <a className={getLinkClass('#top', baseLinkClass)} href="#top" onClick={onNavigate} aria-current={currentHash === '#top' ? 'page' : undefined}>Home</a>
       <a className={getLinkClass('#shop', baseLinkClass)} href="#shop" onClick={onNavigate} aria-current={currentHash === '#shop' ? 'page' : undefined}>Shop</a>
-      <a className={getLinkClass('#care-guides', baseLinkClass)} href="#care-guides" onClick={onNavigate} aria-current={currentHash === '#care-guides' ? 'page' : undefined}>Care guides</a>
       <details className={`group ${mobile ? 'rounded-xl border border-[#e2eaee] px-4 py-3' : 'relative'}`}>
         <summary
           className={`site-nav-summary flex cursor-pointer list-none items-center gap-2 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white [&::-webkit-details-marker]:hidden ${
@@ -48,7 +47,7 @@ export default function NavigationLinks({ mobile = false, onNavigate }) {
           <a className={getLinkClass('#faq', mobile ? 'site-mobile-sublink rounded-lg px-3 py-2.5 text-sm transition' : 'site-dropdown-link block rounded-lg px-3 py-2 transition')} href="#faq" onClick={onNavigate} aria-current={currentHash === '#faq' ? 'page' : undefined}>FAQ</a>
         </div>
       </details>
-      <a className={getLinkClass('#contact', baseLinkClass)} href="#contact" onClick={onNavigate} aria-current={currentHash === '#contact' ? 'page' : undefined}>Contact</a>
+      <a className={getLinkClass('#visit-us', baseLinkClass)} href="#visit-us" onClick={onNavigate} aria-current={currentHash === '#visit-us' ? 'page' : undefined}>Contact</a>
     </>
   );
 }
