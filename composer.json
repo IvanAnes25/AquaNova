@@ -1,0 +1,15 @@
+{
+  "license": "proprietary",
+  "require": {
+    "php": ">=8.1",
+    "ext-pdo": "*",
+    "ext-pdo_mysql": "*",
+    "ext-mbstring": "*",
+    "ext-openssl": "*",
+    "phpmailer/phpmailer": "^6.10"
+  },
+  "config": {
+    "disable-tls": false,
+    "secure-http": true
+  }
+}

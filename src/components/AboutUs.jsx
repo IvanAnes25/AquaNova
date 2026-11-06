@@ -9,6 +9,7 @@ import customerPhotoFour from '../assets/customer-purchase-customer-3.png';
 import customerPhotoFive from '../assets/customer-purchase-customer-5.png';
 import customerPhotoSix from '../assets/customer-purchase-customer-6.png';
 import Icon from './Icon.jsx';
+import { routePath } from '../lib/paths.js';
 
 const customerPhotos = [
   { src: customerCouple, alt: 'Two adult customers with their purchase at Aquatica' },
@@ -48,7 +49,7 @@ const questions = [
     topic: 'Buying',
     question: 'How do I order?',
     answer: 'Log in or sign up in the web app to place an order, then browse the shop and follow the checkout steps.',
-    action: { href: '#login', label: 'Log in or sign up' },
+    action: { href: '/login', label: 'Log in or sign up' },
   },
   {
     topic: 'Tank setup',
@@ -448,7 +449,7 @@ function Faq() {
               <summary>{item.question}<span aria-hidden="true" /></summary>
               <div className="about-faq-answer">
                 <p>{item.answer}</p>
-                {item.action && <a href={item.action.href}>{item.action.label} <Icon name="arrow" className="h-4 w-4" /></a>}
+                {item.action && <a href={routePath(item.action.href)}>{item.action.label} <Icon name="arrow" className="h-4 w-4" /></a>}
               </div>
             </details>
           )) : null}

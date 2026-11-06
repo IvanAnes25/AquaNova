@@ -12,7 +12,7 @@
   background-color: var(--about-bg);
   background-image:
     linear-gradient(180deg, rgb(2 12 29 / 18%), rgb(2 12 29 / 30%)),
-    url("./assets/about-ocean-texture.png");
+    url("../assets/about-ocean-texture.png");
   background-attachment: fixed, fixed;
   background-position: center;
   background-repeat: no-repeat;

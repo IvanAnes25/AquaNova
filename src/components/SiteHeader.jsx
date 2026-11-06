@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import logoImage from '../assets/nasugbu-aquatica-logo.png';
 import Icon from './Icon.jsx';
 import NavigationLinks from './NavigationLinks.jsx';
+import { routePath } from '../lib/paths.js';
 
 export default function SiteHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -54,7 +55,7 @@ export default function SiteHeader() {
               type="search"
             />
           </label>
-          <a className="site-login inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-2 text-sm font-medium transition" href="#login">
+          <a className="site-login inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-2 text-sm font-medium transition" href={routePath('/login')}>
             <Icon name="user" className="h-4 w-4" />
             <span>Log in</span>
           </a>
