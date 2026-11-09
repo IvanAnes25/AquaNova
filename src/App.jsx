@@ -24,7 +24,7 @@ export default function App() {
   if (route === '/dashboard') return <DashboardPage />;
 
   return (
-    <div id="top" className="min-h-screen bg-[#f7fafb] text-[#30475c]">
+    <div id="top" className="min-h-screen bg-white text-[#30475c]">
       <TopBar />
       <SiteHeader />
       <main>

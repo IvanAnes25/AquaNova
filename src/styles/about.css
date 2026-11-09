@@ -1,22 +1,19 @@
 .about-page {
-  --about-ink: #f0f7ff;
-  --about-copy: #d0deed;
-  --about-muted: #a7bdd3;
-  --about-line: rgb(164 203 232 / 34%);
-  --about-blue: #70d4f1;
-  --about-blue-deep: #b1eafb;
-  --about-surface: rgb(3 23 48 / 86%);
-  --about-bg: #06152b;
+  --about-ink: #173c59;
+  --about-copy: #526e82;
+  --about-muted: #69869a;
+  --about-line: rgb(77 147 188 / 24%);
+  --about-blue: #2388b5;
+  --about-blue-deep: #176f98;
+  --about-surface: rgb(255 255 255 / 90%);
+  --about-bg: #fff;
 
   overflow: hidden;
   background-color: var(--about-bg);
   background-image:
-    linear-gradient(180deg, rgb(2 12 29 / 18%), rgb(2 12 29 / 30%)),
-    url("../assets/about-ocean-texture.png");
-  background-attachment: fixed, fixed;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: cover;
+    radial-gradient(ellipse at 12% 18%, rgb(107 190 229 / 14%), transparent 32rem),
+    radial-gradient(ellipse at 88% 47%, rgb(119 206 232 / 12%), transparent 35rem),
+    linear-gradient(180deg, #fff 0%, #f8fcff 48%, #fff 100%);
   color: var(--about-ink);
   font-family: Arial, Helvetica, sans-serif;
 }
@@ -844,21 +841,7 @@
 }
 
 .about-contact::before {
-  position: absolute;
-  z-index: -1;
-  inset: -6rem 0 0;
-  background: linear-gradient(
-    180deg,
-    transparent 0,
-    rgb(7 48 88 / 24%) 12rem,
-    rgb(7 48 88 / 38%) 30rem,
-    rgb(7 48 88 / 44%) 100%
-  );
-  backdrop-filter: blur(2.5px);
-  -webkit-mask-image: linear-gradient(180deg, transparent, #000 6rem);
-  mask-image: linear-gradient(180deg, transparent, #000 6rem);
-  content: "";
-  pointer-events: none;
+  display: none;
 }
 
 .about-contact-layout {
@@ -1509,4 +1492,71 @@
   .about-carousel-dots button::before {
     transition: none;
   }
+}
+
+.about-story-copy > .about-story-lead {
+  color: #35566d;
+}
+
+.about-care-image,
+.about-carousel-stage,
+.about-carousel-slide,
+.about-map,
+.about-shop-photos figure {
+  background-color: #eaf6fb;
+}
+
+.about-customer-stories {
+  background: rgb(233 247 253 / 58%);
+}
+
+.about-carousel-slide {
+  border-color: rgb(255 255 255 / 92%);
+  box-shadow: 0 10px 30px rgb(23 59 66 / 18%);
+}
+
+.about-carousel-arrow {
+  border-color: var(--about-line);
+  background: #fff;
+  color: var(--about-ink);
+  box-shadow: 0 3px 12px rgb(23 59 66 / 14%);
+}
+
+.about-carousel-arrow:hover {
+  background: #eaf7fc;
+  color: var(--about-blue-deep);
+  box-shadow: 0 5px 16px rgb(23 59 66 / 18%);
+}
+
+.about-faq-topics button {
+  color: var(--about-ink);
+}
+
+.about-faq-topics button:hover,
+.about-faq-topics button.is-active {
+  color: var(--about-blue-deep);
+}
+
+.about-faq-item[open] {
+  background: #f2faff;
+  box-shadow: 0 10px 28px rgb(23 59 66 / 10%);
+}
+
+.about-faq-item summary,
+.about-faq-answer p {
+  text-shadow: none;
+}
+
+.about-faq-item summary:hover {
+  color: var(--about-ink);
+}
+
+.about-contact-panel {
+  background: linear-gradient(145deg, #fff, #f1f9fd);
+  box-shadow: 0 20px 50px rgb(23 59 66 / 12%);
+}
+
+.about-contact-form input,
+.about-contact-form textarea {
+  background: #fff;
 }

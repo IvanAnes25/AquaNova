@@ -38,10 +38,11 @@ export default function RegisterPage() {
 
   return (
     <AuthLayout
+      lightTheme
       title="Create an account"
       footer={<>Already have an account? <a className="font-semibold text-cyan-300 hover:text-cyan-200" href={routePath('/login')}>Log in</a></>}
     >
-      <p className="mb-6 text-sm text-slate-300">We will send a one-time verification code to your email.</p>
+      <p className="auth-description mb-6 text-sm text-slate-300">We will send a one-time verification code to your email.</p>
       <FormMessage error>{message}</FormMessage>
       <form className="space-y-4" onSubmit={handleSubmit}>
         <FormField autoComplete="name" label="Name" maxLength={120} onChange={update('name')} required value={values.name} />
@@ -58,8 +59,8 @@ export default function RegisterPage() {
             type="password"
             value={values.password}
           />
-          <p className="mt-1.5 text-xs text-slate-400">Create a new password for AquaNova. Do not use your email password.</p>
-          <p className="mt-1 text-xs text-slate-400">Use at least 8 characters. Long passwords and passphrases are allowed; no special character combinations are required.</p>
+          <p className="auth-hint mt-1.5 text-xs text-slate-400">Create a new password for AquaNova. Do not use your email password.</p>
+          <p className="auth-hint mt-1 text-xs text-slate-400">Use at least 8 characters. Long passwords and passphrases are allowed; no special character combinations are required.</p>
         </div>
         <FormField
           autoComplete="new-password"

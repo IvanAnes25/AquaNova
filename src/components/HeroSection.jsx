@@ -1,4 +1,4 @@
-import shopImage from '../assets/aquatica-shop.png';
+import oceanBackground from '../assets/ocean-home-background.png';
 import Icon from './Icon.jsx';
 
 export default function HeroSection() {
@@ -6,8 +6,8 @@ export default function HeroSection() {
     <section className="home-hero">
       <img
         className="home-hero-background"
-        src={shopImage}
-        alt="Inside the Aquatica aquarium shop, with rows of fish tanks and aquarium supplies"
+        src={oceanBackground}
+        alt="Illustration of fish swimming through a bright blue underwater reef"
         fetchPriority="high"
       />
       <div className="home-hero-overlay" />
@@ -19,7 +19,7 @@ export default function HeroSection() {
             of the underwater world.
           </h1>
           <p className="home-hero-description">
-            From your first aquarium to the tank you’ve cared for years, discover healthy freshwater fish, aquarium essentials, and friendly advice to help every fish feel at home.
+            Whether you’re setting up your first aquarium or caring for a well-loved tank, find healthy freshwater fish, aquarium essentials, and friendly advice to help every fish feel at home.
           </p>
 
           <div className="home-hero-actions">
@@ -38,31 +38,31 @@ export default function HeroSection() {
             <div className="home-hero-details-group">
               <div>
                 <Icon name="location" className="h-4 w-4" />
-                <span>YOUR LOCAL FISH SHOP</span>
+                <span>YOUR LOCAL AQUARIUM SHOP</span>
               </div>
               <span className="home-hero-detail-divider" />
               <div>
                 <span className="home-hero-open-dot" />
-                <span>FRIENDLY ADVICE, IN STORE</span>
+                <span>FRIENDLY IN-STORE ADVICE</span>
               </div>
               <span className="home-hero-detail-divider" />
               <div>
-                <span>NASUGBU, BATANGAS</span>
+                <span>NASUGBU · BATANGAS</span>
               </div>
             </div>
             <div className="home-hero-details-group" aria-hidden="true">
               <div>
                 <Icon name="location" className="h-4 w-4" />
-                <span>YOUR LOCAL FISH SHOP</span>
+                <span>YOUR LOCAL AQUARIUM SHOP</span>
               </div>
               <span className="home-hero-detail-divider" />
               <div>
                 <span className="home-hero-open-dot" />
-                <span>FRIENDLY ADVICE, IN STORE</span>
+                <span>FRIENDLY IN-STORE ADVICE</span>
               </div>
               <span className="home-hero-detail-divider" />
               <div>
-                <span>NASUGBU, BATANGAS</span>
+                <span>NASUGBU · BATANGAS</span>
               </div>
             </div>
           </div>

@@ -64,10 +64,11 @@ export default function VerifyEmailPage() {
 
   return (
     <AuthLayout
+      lightTheme
       title="Verify your email"
       footer={<>Need to start again? <a className="font-semibold text-cyan-300 hover:text-cyan-200" href={routePath('/register')}>Back to sign-up</a></>}
     >
-      <p className="mb-6 text-sm text-slate-300">
+      <p className="auth-description mb-6 text-sm text-slate-300">
         Enter the six-digit code sent to {email || 'your email address'}. The code expires in 10 minutes.
       </p>
       <FormMessage error={error}>{message}</FormMessage>
@@ -85,7 +86,7 @@ export default function VerifyEmailPage() {
         <SubmitButton disabled={busy || !email}>{busy ? 'Checking code…' : 'Verify and create account'}</SubmitButton>
       </form>
       <button
-        className="mt-4 w-full rounded-xl border border-slate-600 px-4 py-3 text-sm font-medium text-slate-200 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+        className="auth-resend mt-4 w-full rounded-xl border border-slate-600 px-4 py-3 text-sm font-medium text-slate-200 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
         disabled={busy || !email || seconds > 0}
         onClick={handleResend}
         type="button"

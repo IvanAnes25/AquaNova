@@ -25,10 +25,11 @@ export default function LoginPage() {
 
   return (
     <AuthLayout
+      lightTheme
       title="Log in"
       footer={<>New to the shop? <a className="font-semibold text-cyan-300 hover:text-cyan-200" href={routePath('/register')}>Create an account</a></>}
     >
-      <p className="mb-6 text-sm text-slate-300">Use your AquaNova account email and password.</p>
+      <p className="auth-description mb-6 text-sm text-slate-300">Use your AquaNova account email and password.</p>
       <FormMessage error>{message}</FormMessage>
       <form className="space-y-5" onSubmit={handleSubmit}>
         <FormField
@@ -48,7 +49,7 @@ export default function LoginPage() {
           value={password}
         />
         <div className="-mt-2 text-right">
-          <a className="text-sm text-cyan-300 hover:text-cyan-200" href={routePath('/forgot-password')}>Forgot password?</a>
+          <a className="auth-form-link text-sm text-cyan-300 hover:text-cyan-200" href={routePath('/forgot-password')}>Forgot password?</a>
         </div>
         <SubmitButton disabled={busy}>{busy ? 'Logging in…' : 'Log in'}</SubmitButton>
       </form>
