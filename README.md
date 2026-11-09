@@ -4,7 +4,7 @@ A school project for Nasugbu Aquatica using React, Vite, Tailwind CSS, plain PHP
 
 ## Project structure
 
-- `src/pages/` contains the separate login, registration, verification, password-reset, shop, and owner-dashboard pages.
+- `src/pages/` contains shared login, customer registration, verification, password-reset, and workspace entry pages.
 - `src/components/` contains shared React interface components.
 - `src/lib/` contains URL and API helpers.
 - `src/assets/` and `src/styles/` contain frontend images and styles.
@@ -24,8 +24,8 @@ The root contains the app entry point and the Vite, npm, Composer, and Apache co
 2. Copy `private/auth.example.php` to `private/auth.php`. Fill in the database and SMTP settings, set `app_url` to `http://localhost/AquaNova`, and replace `app_key` with a random 64-character hexadecimal value. Generate one with `php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"`.
 3. Keep `private/auth.php` out of Git. The file is ignored and direct access to `private/` is denied by Apache. Never put a mailbox password in a React file or email form.
 4. Install the frontend and PHP dependencies with `npm install` and `composer install`. If Composer reports that ZIP support is unavailable, enable PHP's `zip` extension first.
-5. Run `npm run dev` and open the Vite URL. The Vite proxy forwards API calls to the XAMPP Apache project at `http://localhost/AquaNova`.
-6. To test the built site through Apache, run `npm run build`, then open `http://localhost/AquaNova/`. The `.htaccess` rules send direct page addresses such as `/login` to the React app and serve generated assets from `public/assets/`.
+5. Run `npm run dev` and `npm --prefix webapp run dev` in separate terminals, then open the website Vite URL. Its proxy forwards `/webapp/` to the webapp and API calls to the XAMPP Apache project at `http://localhost/AquaNova`.
+6. To test the built site through Apache, run `npm run build`, then open `http://localhost/AquaNova/`. The `.htaccess` rules send direct page addresses such as `/login` to the React app, serve the webapp at `/webapp/`, and serve generated assets from `public/`.
 
 Use an SMTP mailbox or provider with SMTP credentials and TLS. For example, enter the provider's host, port, username, password, and TLS mode in the ignored `private/auth.php` file. Configure a real sender mailbox; the site never signs in to a user's email account.
 
@@ -52,12 +52,33 @@ The script refuses to run over HTTP and refuses to create another owner after th
 - `/register` validates the new user's name, email, phone, and AquaNova-only password. It stores a password hash in `pending_registrations` and sends a six-digit email code.
 - `/verify-email` checks the one-time code. Only a correct, unexpired code creates a customer row in `users`; successful registration returns to `/login`.
 - `/forgot-password` sends a generic response and, for a matching account, emails a single-use reset link. `/reset-password` accepts the token from the URL fragment and submits it in the request body.
-- Successful customers go to `/shop`; owners go to `/dashboard`. Those routes call server endpoints that check the current database role. The dashboard is not protected merely by hiding a link.
+- There is one login form for both roles. Successful customers and owners go to `/webapp/`; the app checks the existing server session and calls the customer- or owner-protected endpoint before showing the matching workspace.
+- `/shop` and `/dashboard` remain role-checked entry points that forward authenticated users to `/webapp/`. The owner menu is absent for customers, and the owner workspace is not protected merely by hiding a link.
+- There is one login form for both roles. The authenticated database role determines whether the customer shop or owner workspace opens; registration always creates a `customer`.
+- Developers provision the initial owner using `database/create_owner.php`, which refuses to add a second owner and stores an Argon2id hash. Do not distribute or keep a shared default password.
 - `api/auth/` endpoints handle CSRF tokens, registration, verification/resend, login/logout, session checks, role checks, and password reset. The browser back button and direct page addresses work through Apache's front-controller rewrite.
 
 The matching JSON endpoints are `GET csrf.php`, `GET pending.php`, `POST register.php`, `POST verify.php`, `POST resend.php`, `POST login.php`, `GET session.php`, `POST logout.php`, `POST forgot-password.php`, `POST reset-password.php`, and the protected `GET customer-page.php` / `GET owner-page.php`. They are all under `/api/auth/`.
 
 Users never enter their Gmail or other email-account password. The sign-up password is created only for AquaNova. The email address is the login identifier (rather than a separate username), and it is used to send the verification code.
+
+### Role and owner-account requirements
+
+- **FR-ROLE-1:** Provide one login use case for customers and owners; route each authenticated account according to its server-verified role.
+- **FR-ROLE-2:** Allow public registration only as a customer. Do not show a role selector on registration.
+- **FR-ROLE-3:** Create the first owner account through a developer-only setup process, not public registration.
+- **FR-ROLE-4:** Require the owner to replace a temporary password on first login before accessing owner features. This is a pending backend requirement: the current schema and auth API do not yet store or enforce a first-login password-change flag.
+- **FR-ROLE-5:** Protect every owner page and action with a server-side owner-role check. The existing owner page endpoint checks the role; future owner data/action endpoints must do the same.
+
+```mermaid
+flowchart LR
+    Customer([Customer]) --- Login((Log in))
+    Owner([Owner]) --- Login
+    Customer --- Register((Register))
+    Developer([Developer]) --- CreateOwner((Create owner account))
+    Login --> CustomerArea[Customer area]
+    Login --> OwnerArea[Owner area]
+```
 
 ## Password hashing and operational security
 
@@ -104,8 +125,9 @@ Never commit a real password, app key, SMTP secret, database password, or a veri
 - [ ] Request a resend before 60 seconds; confirm it is denied. After 60 seconds, resend and verify that the previous code no longer works. Confirm no more than three resends per hour.
 - [ ] Log in with a wrong password and an unknown email; confirm both show `Incorrect email or password`.
 - [ ] Submit five failed logins for one email and, separately, from one client address; confirm the 15-minute block message. Confirm a successful login clears the counters.
-- [ ] Log in as a customer and confirm arrival at `/shop`; log in as the CLI-created owner and confirm arrival at `/dashboard`.
+- [ ] Use the website's single login as a customer and as the CLI-created owner; confirm `/webapp/` shows only the matching customer or owner navigation.
 - [ ] While logged in as a customer, open `/dashboard` directly and request `/api/auth/owner-page.php`; confirm the server rejects owner access.
+- [ ] Confirm customer registration has no role selector and creates only a customer account.
 - [ ] Log out and confirm protected pages reject the old session. Leave a session idle for 30 minutes and confirm it expires.
 - [ ] Request a forgotten password for both known and unknown emails; confirm the response text is the same. Use a valid reset link once, then confirm it cannot be reused.
 - [ ] Confirm all data-changing forms send a CSRF token and reject a missing or invalid token.

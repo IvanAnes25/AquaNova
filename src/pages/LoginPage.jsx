@@ -14,8 +14,8 @@ export default function LoginPage() {
     setMessage('');
     setBusy(true);
     try {
-      const result = await authPost('/api/auth/login.php', { email, password });
-      window.location.assign(routePath(result.role === 'owner' ? '/dashboard' : '/shop'));
+      await authPost('/api/auth/login.php', { email, password });
+      window.location.assign(routePath('/webapp/'));
     } catch (error) {
       setMessage(error.message);
     } finally {

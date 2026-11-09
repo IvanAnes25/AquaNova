@@ -13,6 +13,8 @@ Options -Indexes
 
     RewriteRule ^(?:private|database|src|vendor|node_modules|\.git)(?:/|$) - [F,L,NC]
     RewriteRule ^api/(?:bootstrap\.php|controllers|services)(?:/|$) - [F,L,NC]
+    RewriteRule ^webapp/assets/(.*)$ public/webapp/assets/$1 [L]
+    RewriteRule ^webapp/?$ public/webapp/index.html [L]
     RewriteRule ^assets/(.*)$ public/assets/$1 [L]
     RewriteRule ^api/ - [L]
 
