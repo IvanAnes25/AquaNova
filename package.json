@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --config vite.config.js",
     "build": "vite build --config vite.config.js && npm --prefix webapp run build",
-    "preview": "vite preview --config vite.config.js"
+    "preview": "vite preview --config vite.config.js",
+    "deploy:cloudflare": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -16,6 +17,7 @@
     "@tailwindcss/vite": "^4.1.0",
     "@vitejs/plugin-react": "^5.0.0",
     "tailwindcss": "^4.1.0",
-    "vite": "^7.0.0"
+    "vite": "^7.0.0",
+    "wrangler": "^4.159.0"
   }
 }

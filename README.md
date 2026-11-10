@@ -33,6 +33,25 @@ Use an SMTP mailbox or provider with SMTP credentials and TLS. For example, ente
 
 Use a PHP-capable Hostinger plan and make the project root (the folder containing `index.php` and `api/`) the web document root so the PHP endpoints can run. Install Composer dependencies and build the frontend on deployment. Import `database/auth_schema.sql`, create a production `private/auth.php` with Hostinger's MySQL/SMTP settings, set `environment` to `production` and `app_url` to the HTTPS site address, and ensure the host supports Argon2id and Apache rewrite/header rules. Set `trust_proxy_https` to `true` only if the hosting proxy replaces the `X-Forwarded-Proto` header. Verify all pages and auth endpoints use HTTPS before accepting accounts.
 
+## Cloudflare Workers frontend with PHP backend
+
+The Cloudflare Worker serves the built React sites from `public/` and forwards `/api/*` requests to a separately hosted PHP/MySQL backend. Cloudflare Workers do not run this project's PHP endpoints or MySQL database. Deploy the PHP project to a PHP-capable host first, with its API available at the host root (for example, `https://api.example.com/api/auth/session.php`) and HTTPS enabled.
+
+Set `app_url` in the backend's private `auth.php` to the public Cloudflare site URL, not the PHP API host. Configure the Worker with the PHP host's HTTPS origin (origin only, with no path):
+
+```powershell
+npm install
+npm run build
+npx wrangler deploy
+npx wrangler secret put PHP_API_ORIGIN
+```
+
+When prompted for `PHP_API_ORIGIN`, enter a value such as `https://api.example.com`. Set this secret before relying on login; until configured, API requests return an explicit 503 response. The Worker proxies the browser's same-origin API requests and session cookies to PHP. Keep the backend credentials in its private configuration and never put them in the frontend or Worker source.
+
+For Cloudflare Workers Builds, use the repository root as the project root, `npm run build` as the build command, and `npx wrangler deploy` as the deploy command. Alternatively, `npm run deploy:cloudflare` builds and deploys from a local terminal.
+
+The Wrangler configuration explicitly points `assets.directory` at the build output (`public/`), which is required for Workers Static Assets. This setup targets Cloudflare Workers; another platform needs its own API reverse proxy or serverless function configuration. A frontend-only deployment can display the site but cannot authenticate users without access to the PHP API and database.
+
 ## First owner account
 
 Owner creation is a CLI-only operation. In PowerShell, enter the password at the hidden prompt, run the script, and remove the temporary environment variable:

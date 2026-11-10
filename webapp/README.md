@@ -11,7 +11,7 @@ npm run dev
 npm --prefix webapp run dev
 ```
 
-The website's Vite server proxies `/webapp/` to the webapp server on port 5174. A production `npm run build` builds the website and places the webapp bundle in `public/webapp/`; Apache rewrites `/webapp/` to that built app.
+The website's Vite server proxies API calls to the local Apache project. `/webapp/` is served from the latest production build in `public/webapp/`, so run `npm run build` to refresh it while developing the integrated login flow. The webapp's separate Vite server is available when working on the workspace by itself. A production build places the bundle in `public/webapp/`; Apache serves it through the project's rewrite rules.
 
 Page views are in `src/pages/`, reusable interface pieces are in `src/components/`, and app-wide demo state and role-aware navigation are in `src/App.jsx`.
 
