@@ -14,8 +14,9 @@ export default defineConfig({
         rewrite: (path) => `/AquaNova${path}`,
       },
       '/webapp': {
-        target: 'http://127.0.0.1:5174',
+        target: 'http://localhost',
         changeOrigin: true,
+        rewrite: (path) => `/AquaNova${path}`,
       },
     },
   },
