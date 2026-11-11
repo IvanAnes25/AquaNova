@@ -4,7 +4,7 @@ import { Button, SectionTitle, Status } from '../components/UI.jsx';
 import { money, stockLabel } from '../lib/format.js';
 
 export default function ProductsPage({ products, category, setCategory, query, setQuery, onAddProduct, onStock }) {
-  const categories = ['All items', 'Fish', 'Aquariums', 'Accessories', 'Plants'];
+  const categories = ['All items', ...new Set(products.map((product) => product.category))];
   const filtered = products.filter((product) => (category === 'All items' || product.category === category) && `${product.name} ${product.category}`.toLowerCase().includes(query.toLowerCase()));
   return <>
     <SectionTitle eyebrow="YOUR AQUATICA CATALOG" title="Products" action={<Button onClick={onAddProduct}><Icon name="plus" size={16} /> Add product</Button>} />

@@ -94,7 +94,9 @@ export const initialOrders = [
     status: 'Preparing',
     paymentStatus: 'Paid',
     date: 'Today, 10:42 AM',
+    createdAt: new Date('2026-11-11T10:42:00+08:00').getTime(),
     reference: '123456789012',
+    referenceHistory: ['123456789012'],
     proofName: 'gcash-payment.jpg',
     proofReason: '',
     stockDeducted: true,
@@ -114,6 +116,7 @@ export const initialOrders = [
     status: 'Pending',
     paymentStatus: 'Unpaid',
     date: 'Today, 9:18 AM',
+    createdAt: new Date('2026-11-11T09:18:00+08:00').getTime(),
     reference: '',
     proofName: '',
     proofReason: '',
@@ -134,6 +137,7 @@ export const initialOrders = [
     status: 'Ready',
     paymentStatus: 'Unpaid',
     date: 'Yesterday, 3:26 PM',
+    createdAt: new Date('2026-11-10T15:26:00+08:00').getTime(),
     reference: '',
     proofName: '',
     proofReason: '',
@@ -154,7 +158,9 @@ export const initialOrders = [
     status: 'Pending',
     paymentStatus: 'Under review',
     date: 'Yesterday, 1:05 PM',
+    createdAt: new Date('2026-11-10T13:05:00+08:00').getTime(),
     reference: '876543210987',
+    referenceHistory: ['876543210987'],
     proofName: 'payment-proof.png',
     proofReason: '',
     stockDeducted: false,
@@ -174,12 +180,17 @@ export const initialOrders = [
     status: 'Completed',
     paymentStatus: 'Paid',
     date: 'Nov 06, 2026',
+    createdAt: new Date('2026-11-06T12:00:00+08:00').getTime(),
     reference: '',
     proofName: '',
     proofReason: '',
     stockDeducted: true,
   },
 ];
+
+export function orderNeedsAction(order) {
+  return order.status === 'Pending';
+}
 
 export const initialMovements = [
   { id: 'MV-204', product: 'Red Betta', productId: 'betta-red', change: -2, reason: 'Sale', orderId: 'AQ-1048', date: 'Today, 10:42 AM' },

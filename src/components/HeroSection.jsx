@@ -14,12 +14,11 @@ export default function HeroSection() {
       <div className="home-hero-inner">
         <div className="home-hero-content">
           <h1>
-            Find your <span>little piece</span>
-            <br className="hidden sm:block" />
-            of the underwater world.
+            Dive into the world of aquatic wonders at
+            <span> Nasugbu Aquatica!</span>
           </h1>
           <p className="home-hero-description">
-            Whether you’re setting up your first aquarium or caring for a well-loved tank, find healthy freshwater fish, aquarium essentials, and friendly advice to help every fish feel at home.
+            Our pet store is dedicated to providing top-quality aquatic animals, cutting-edge equipment, and personalized guidance to ensure a healthy and happy aquatic environment.
           </p>
 
           <div className="home-hero-actions">

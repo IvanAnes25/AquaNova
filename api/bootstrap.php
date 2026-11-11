@@ -217,7 +217,8 @@ function current_auth_user(): ?array
 
     // Load the role from MySQL on every protected request instead of trusting the browser.
     $statement = auth_db()->prepare(
-        'SELECT id, name, email, role, session_version FROM users WHERE id = :id LIMIT 1'
+        'SELECT id, name, email, phone, role, session_version, must_change_password
+         FROM users WHERE id = :id LIMIT 1'
     );
     $statement->execute(['id' => $_SESSION['user_id']]);
     $user = $statement->fetch();
@@ -228,6 +229,7 @@ function current_auth_user(): ?array
     }
 
     $user['role'] = auth_role_for_app($user['role']);
+    $_SESSION['must_change_password'] = (bool) $user['must_change_password'];
     $_SESSION['last_activity'] = time();
     return $user;
 }

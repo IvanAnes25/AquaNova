@@ -7,7 +7,7 @@ export function Button({ children, variant = 'primary', className = '', ...props
 
 export function Status({ children }) {
   const value = String(children ?? '');
-  const low = value === 'Low stock' || value === 'Sold out';
+  const low = value === 'Low stock';
   return <span className={`status-label ${low ? 'status-low' : ''}`}>{low ? '! ' : ''}{value}</span>;
 }
 

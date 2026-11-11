@@ -64,8 +64,8 @@ try {
     $hash = password_hash($password, PASSWORD_ARGON2ID, $config['argon2']);
     $password = '';
     $insert = $pdo->prepare(
-        "INSERT INTO users (name, email, phone, password_hash, role)
-         VALUES (:name, :email, '', :password_hash, 'owner')"
+        "INSERT INTO users (name, email, phone, password_hash, role, must_change_password)
+         VALUES (:name, :email, '', :password_hash, 'owner', 1)"
     );
     $insert->execute(['name' => $name, 'email' => $email, 'password_hash' => $hash]);
     $pdo->prepare('SELECT RELEASE_LOCK(:name)')->execute(['name' => 'aquanova_first_owner']);

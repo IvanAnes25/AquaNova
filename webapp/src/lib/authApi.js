@@ -42,19 +42,24 @@ export async function authGet(path) {
 }
 
 export async function authPost(path, values = {}) {
+  return authRequest(path, 'POST', values);
+}
+
+export async function authRequest(path, method, values = {}) {
   if (!csrfToken) {
     const csrf = await authGet('/api/auth/csrf.php');
     csrfToken = csrf.csrfToken;
   }
+  const isForm = values instanceof FormData;
   const response = await request(path, {
-    method: 'POST',
+    method,
     credentials: 'same-origin',
     headers: {
       Accept: 'application/json',
-      'Content-Type': 'application/json',
       'X-CSRF-Token': csrfToken,
+      ...(!isForm ? { 'Content-Type': 'application/json' } : {}),
     },
-    body: JSON.stringify(values),
+    body: isForm ? values : JSON.stringify(values),
   });
   return readResponse(response);
 }

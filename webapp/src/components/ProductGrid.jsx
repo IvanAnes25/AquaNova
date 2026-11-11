@@ -13,8 +13,8 @@ export default function ProductGrid({ products, onSelect, onAdd }) {
   return <div className="product-grid">{products.map((product) => <article className="product-card" key={product.id}>
     <button className="product-image-button" onClick={() => onSelect(product)}>
       <ProductImage product={product} /><span className="category-pill">{product.category}</span>
-      {product.stock > 0 && product.stock <= 2 && <span className="low-stock-pill">! {product.stock} left</span>}
-      {product.stock === 0 && <span className="sold-out-pill">! Sold out</span>}
+      {product.stock > 0 && product.stock <= 5 && <span className="low-stock-pill">! Low stock · {product.stock} left</span>}
+      {product.stock === 0 && <span className="sold-out-pill">Sold out</span>}
     </button>
     <div className="product-card-body">
       <button className="product-name" onClick={() => onSelect(product)}>{product.name}</button>

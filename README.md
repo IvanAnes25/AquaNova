@@ -1,4 +1,4 @@
-# AquaNova
+# Aquatica
 
 A school project for Nasugbu Aquatica using React, Vite, Tailwind CSS, plain PHP, PDO, and MySQL.
 
@@ -27,30 +27,75 @@ The root contains the app entry point and the Vite, npm, Composer, and Apache co
 5. Run `npm run dev` and `npm --prefix webapp run dev` in separate terminals, then open the website Vite URL. Its proxy forwards `/webapp/` to the webapp and API calls to the XAMPP Apache project at `http://localhost/AquaNova`.
 6. To test the built site through Apache, run `npm run build`, then open `http://localhost/AquaNova/`. The `.htaccess` rules send direct page addresses such as `/login` to the React app, serve the webapp at `/webapp/`, and serve generated assets from `public/`.
 
+## Commerce database (development)
+
+The existing authentication and commerce tables are retained. The additive commerce migration adds the order workflow, categories, addresses, carts, payment proofs, notifications, audit history, and canonical catalog fields without deleting legacy columns or rows. New canonical order methods/statuses use `payment_method_v2` and `payment_status_v2` alongside the legacy enum fields until the API transition is complete.
+
+Copy `.env.example` to `.env` and set the database values, or use the existing `private/auth.php` database settings. Never commit `.env`. After importing the existing authentication schema and starting MySQL, run:
+
+```powershell
+php scripts\migrate.php up
+php database\seed.php
+php tests\commerce_schema_test.php
+php tests\commerce_auto_cancel_test.php
+```
+
+The migration command is repeatable. `php scripts\migrate.php down` performs a guarded rollback: it refuses to remove tables or user fields containing data. Run the development seed only against a local database; it inserts enough sample products to bring the catalog to at least 20, reconciles opening stock movements, and creates two Argon2id-hashed `.test` customer accounts. Their random temporary passwords are printed only when each account is first created. Do not use the development seed on production.
+
 Use an SMTP mailbox or provider with SMTP credentials and TLS. For example, enter the provider's host, port, username, password, and TLS mode in the ignored `private/auth.php` file. Configure a real sender mailbox; the site never signs in to a user's email account.
+
+## Versioned commerce API
+
+All commerce routes use `/api/v1`. Responses are JSON unless a route explicitly returns a CSV file or image. The API uses the existing session cookie; mutating requests also require the CSRF token returned by `/api/auth/csrf.php`. Customer and owner routes check the authenticated database role on the server. An owner must change the temporary password before using owner features.
+
+### Public and customer routes
+
+| Method | Route | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/catalog/products` | Public | Search and filter active products |
+| `GET` | `/api/v1/catalog/categories` | Public | List categories containing active products |
+| `GET` | `/api/v1/settings/public` | Public | Shop address, delivery fee, and GCash availability |
+| `GET` | `/api/v1/settings/gcash-qr` | Signed-in user | View the configured shop QR |
+| `GET` | `/api/v1/cart` | Customer | Read the saved cart |
+| `POST` | `/api/v1/cart/items` | Customer | Add a product and quantity |
+| `PATCH`, `DELETE` | `/api/v1/cart/items/{productId}` | Customer | Update or remove a cart item |
+| `GET`, `POST` | `/api/v1/orders` | Customer | List orders or create an order from the saved cart |
+| `GET` | `/api/v1/orders/{id}` | Owning customer | Read an order |
+| `POST` | `/api/v1/orders/{id}/cancel` | Owning customer | Cancel while the order is pending |
+| `POST` | `/api/v1/orders/{id}/payment-proof` | Owning customer | Submit a GCash reference and JPG/PNG proof (maximum 2 MB) |
+| `GET` | `/api/v1/orders/{id}/payment-proof/image` | Owning customer or owner | View a stored proof |
+| `GET`, `PATCH` | `/api/v1/account/profile` | Customer | Read or update profile and default address |
+| `POST` | `/api/v1/account/password` | Signed-in user | Change the temporary first-login password |
+| `GET` | `/api/v1/notifications` | Signed-in user | List notifications |
+| `GET` | `/api/v1/notifications/unread-count` | Signed-in user | Count unread notifications |
+| `PATCH` | `/api/v1/notifications/{id}/read` | Signed-in user | Mark one notification as read |
+| `POST` | `/api/v1/notifications/read-all` | Signed-in user | Mark all notifications as read |
+
+### Owner routes
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/owner/dashboard` | Dashboard totals and low-stock count |
+| `GET` | `/api/v1/owner/orders` | Order inbox, status tabs, and counts |
+| `GET` | `/api/v1/owner/orders/{id}` | Read an order |
+| `POST` | `/api/v1/owner/orders/{id}/actions` | Approve/reject proof, confirm cash, mark ready, complete, or cancel |
+| `GET`, `POST` | `/api/v1/owner/products` | List or create products |
+| `PATCH` | `/api/v1/owner/products/{id}` | Update product details |
+| `GET` | `/api/v1/owner/inventory` | Read stock and recent movements |
+| `POST` | `/api/v1/owner/inventory/movements` | Record a restock or adjustment |
+| `GET` | `/api/v1/owner/customers` | List and search customers |
+| `GET` | `/api/v1/owner/reports` | Read report summaries and sales data |
+| `GET` | `/api/v1/owner/reports.csv` | Download the orders CSV |
+| `GET`, `PUT` | `/api/v1/owner/settings` | Read or update shop, delivery-fee, GCash, and auto-cancel details |
+| `GET`, `POST` | `/api/v1/owner/settings/gcash-qr` | View or upload the shop QR (JPG/PNG, maximum 2 MB) |
+
+GCash checkout is rejected by the server until the recipient name, number, and QR image are configured. Payment references are unique. Stock is deducted when a GCash proof is approved or a cash order is confirmed; each stock change is recorded in `stock_movements`.
+
+The owner may configure an auto-cancel duration from 1 to 720 hours in Settings; leaving the field blank disables the job. The scheduled CLI command cancels only Pending orders with Unpaid payment older than the order's creation time threshold, or Rejected payment older than its latest rejection time threshold. Proofs Under review are never auto-cancelled. Schedule `php scripts\cancel_expired_orders.php` to run periodically (for example, every 15 minutes); it records order history and audit entries and notifies the customer.
 
 ## Hostinger deployment
 
 Use a PHP-capable Hostinger plan and make the project root (the folder containing `index.php` and `api/`) the web document root so the PHP endpoints can run. Install Composer dependencies and build the frontend on deployment. Import `database/auth_schema.sql`, create a production `private/auth.php` with Hostinger's MySQL/SMTP settings, set `environment` to `production` and `app_url` to the HTTPS site address, and ensure the host supports Argon2id and Apache rewrite/header rules. Set `trust_proxy_https` to `true` only if the hosting proxy replaces the `X-Forwarded-Proto` header. Verify all pages and auth endpoints use HTTPS before accepting accounts.
-
-## Cloudflare Workers frontend with PHP backend
-
-The Cloudflare Worker serves the built React sites from `public/` and forwards `/api/*` requests to a separately hosted PHP/MySQL backend. Cloudflare Workers do not run this project's PHP endpoints or MySQL database. Deploy the PHP project to a PHP-capable host first, with its API available at the host root (for example, `https://api.example.com/api/auth/session.php`) and HTTPS enabled.
-
-Set `app_url` in the backend's private `auth.php` to the public Cloudflare site URL, not the PHP API host. Configure the Worker with the PHP host's HTTPS origin (origin only, with no path):
-
-```powershell
-npm install
-npm run build
-npx wrangler deploy
-npx wrangler secret put PHP_API_ORIGIN
-```
-
-When prompted for `PHP_API_ORIGIN`, enter a value such as `https://api.example.com`. Set this secret before relying on login; until configured, API requests return an explicit 503 response. The Worker proxies the browser's same-origin API requests and session cookies to PHP. Keep the backend credentials in its private configuration and never put them in the frontend or Worker source.
-
-For Cloudflare Workers Builds, use the repository root as the project root, `npm run build` as the build command, and `npx wrangler deploy` as the deploy command. Alternatively, `npm run deploy:cloudflare` builds and deploys from a local terminal.
-
-The Wrangler configuration explicitly points `assets.directory` at the build output (`public/`), which is required for Workers Static Assets. This setup targets Cloudflare Workers; another platform needs its own API reverse proxy or serverless function configuration. A frontend-only deployment can display the site but cannot authenticate users without access to the PHP API and database.
 
 ## First owner account
 
@@ -71,10 +116,9 @@ The script refuses to run over HTTP and refuses to create another owner after th
 - `/register` validates the new user's name, email, phone, and AquaNova-only password. It stores a password hash in `pending_registrations` and sends a six-digit email code.
 - `/verify-email` checks the one-time code. Only a correct, unexpired code creates a customer row in `users`; successful registration returns to `/login`.
 - `/forgot-password` sends a generic response and, for a matching account, emails a single-use reset link. `/reset-password` accepts the token from the URL fragment and submits it in the request body.
-- There is one login form for both roles. Successful customers and owners go to `/webapp/`; the app checks the existing server session and calls the customer- or owner-protected endpoint before showing the matching workspace.
+- There is one login form for both roles. The authenticated database role determines whether the customer shop or owner workspace opens; registration always creates a `customer`. Successful customers and owners go to `/webapp/`, where the session and role are checked again.
 - `/shop` and `/dashboard` remain role-checked entry points that forward authenticated users to `/webapp/`. The owner menu is absent for customers, and the owner workspace is not protected merely by hiding a link.
-- There is one login form for both roles. The authenticated database role determines whether the customer shop or owner workspace opens; registration always creates a `customer`.
-- Developers provision the initial owner using `database/create_owner.php`, which refuses to add a second owner and stores an Argon2id hash. Do not distribute or keep a shared default password.
+- Developers provision the initial owner using `database/create_owner.php`, which refuses to add a second owner and stores an Argon2id hash. The owner must change this initial password at first login before accessing owner features. Do not distribute or keep a shared default password.
 - `api/auth/` endpoints handle CSRF tokens, registration, verification/resend, login/logout, session checks, role checks, and password reset. The browser back button and direct page addresses work through Apache's front-controller rewrite.
 
 The matching JSON endpoints are `GET csrf.php`, `GET pending.php`, `POST register.php`, `POST verify.php`, `POST resend.php`, `POST login.php`, `GET session.php`, `POST logout.php`, `POST forgot-password.php`, `POST reset-password.php`, and the protected `GET customer-page.php` / `GET owner-page.php`. They are all under `/api/auth/`.
@@ -86,8 +130,8 @@ Users never enter their Gmail or other email-account password. The sign-up passw
 - **FR-ROLE-1:** Provide one login use case for customers and owners; route each authenticated account according to its server-verified role.
 - **FR-ROLE-2:** Allow public registration only as a customer. Do not show a role selector on registration.
 - **FR-ROLE-3:** Create the first owner account through a developer-only setup process, not public registration.
-- **FR-ROLE-4:** Require the owner to replace a temporary password on first login before accessing owner features. This is a pending backend requirement: the current schema and auth API do not yet store or enforce a first-login password-change flag.
-- **FR-ROLE-5:** Protect every owner page and action with a server-side owner-role check. The existing owner page endpoint checks the role; future owner data/action endpoints must do the same.
+- **FR-ROLE-4:** Require the owner to replace the initial password on first login before accessing owner features. The user flag is stored in the database, checked on protected requests, and cleared when the owner changes the password.
+- **FR-ROLE-5:** Protect every owner page and action with a server-side owner-role check. The page and `/api/v1/owner/*` endpoints verify the authenticated database role.
 
 ```mermaid
 flowchart LR
@@ -135,6 +179,14 @@ Never commit a real password, app key, SMTP secret, database password, or a veri
 
 ## Test checklist
 
+- [ ] Run `php scripts\migrate.php up`, `php database\seed.php`, and `php tests\commerce_schema_test.php` against a local development database.
+- [ ] Create the first owner with `database/create_owner.php`; confirm the owner cannot access the workspace until the initial password is changed.
+- [ ] As a customer, exercise cart, delivery/pickup checkout, order cancellation while Pending, and order history.
+- [ ] Configure the delivery fee and GCash recipient name, number, and QR in owner Settings; confirm GCash checkout stays unavailable until all three are configured.
+- [ ] Submit a JPG/PNG GCash proof under 2 MB; verify reference uniqueness, rejection reason and resubmission, then approval, payment, stock movement, order progression, and customer notification.
+- [ ] Confirm COD and pickup-cash orders deduct stock only when confirmed, record payment when completed, and write stock movements for cancellation/restoration.
+- [ ] Confirm customers cannot access owner endpoints or another customer's order/proof, and mutating API requests reject missing CSRF tokens.
+- [ ] As the owner, check the single Orders inbox, status counts, reports, and CSV download.
 - [ ] Open `/login`, `/register`, and `/verify-email` directly; refresh each page and use browser Back/Forward.
 - [ ] Submit a valid sign-up. Confirm the email receives a code, and that no `users` row exists until the correct code is verified.
 - [ ] Confirm the pending password and final `users.password_hash` are Argon2id hashes (the final hash begins `$argon2id$v=19$m=32768,t=3,p=1$`), never plain text.

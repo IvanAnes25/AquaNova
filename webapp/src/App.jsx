@@ -3,8 +3,10 @@ import Icon from './Icon.jsx';
 import Sidebar, { customerPages, ownerPages } from './components/Sidebar.jsx';
 import { Button, Field, Modal } from './components/UI.jsx';
 import { money } from './lib/format.js';
-import { initialMovements, initialOrders, initialProducts } from './data.js';
+import { orderNeedsAction } from './data.js';
 import { authGet, authPost } from './lib/authApi.js';
+import { commerceGet, commerceRequest } from './lib/commerceApi.js';
+import { commercePath } from './lib/commerceApi.js';
 import AccountPage from './pages/AccountPage.jsx';
 import CartPage from './pages/CartPage.jsx';
 import CheckoutPage from './pages/CheckoutPage.jsx';
@@ -13,21 +15,22 @@ import DashboardPage from './pages/DashboardPage.jsx';
 import HomePage from './pages/HomePage.jsx';
 import InventoryPage from './pages/InventoryPage.jsx';
 import MyOrdersPage from './pages/MyOrdersPage.jsx';
+import NotificationsPage from './pages/NotificationsPage.jsx';
 import OrderDetailPage from './pages/OrderDetailPage.jsx';
 import OrdersPage from './pages/OrdersPage.jsx';
 import PaymentPage from './pages/PaymentPage.jsx';
-import PaymentsPage from './pages/PaymentsPage.jsx';
 import ProductsPage from './pages/ProductsPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 import ShopPage from './pages/ShopPage.jsx';
+import FirstLoginPasswordPage from './pages/FirstLoginPasswordPage.jsx';
 import { ProductImage } from './components/ProductGrid.jsx';
 
 const pageTitles = {
   home: 'A little piece of the ocean', shop: 'Shop', cart: 'Your cart', checkout: 'Checkout',
   'my-orders': 'My orders', account: 'My account', dashboard: 'Dashboard', orders: 'Orders',
-  payments: 'Payment verification', products: 'Products', inventory: 'Inventory', customers: 'Customers',
-  reports: 'Reports', settings: 'Settings', payment: 'Pay with GCash', 'order-placed': 'Order placed',
+  products: 'Products', inventory: 'Inventory', customers: 'Customers',
+  reports: 'Reports', settings: 'Settings', notifications: 'Notifications', payment: 'Pay with GCash', 'order-placed': 'Order placed',
   'proof-submitted': 'Payment received', 'order-detail': 'Order details',
 };
 function websiteLoginPath() {
@@ -46,25 +49,31 @@ export default function App() {
   const [role, setRole] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [accessLoading, setAccessLoading] = useState(false);
-  const [products, setProducts] = useState(() => stored('aquatica-demo-products', initialProducts));
-  const [orders, setOrders] = useState(() => stored('aquatica-demo-orders', initialOrders));
-  const [movements, setMovements] = useState(() => stored('aquatica-demo-movements', initialMovements));
+  const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [cart, setCart] = useState([]);
+  const [movements, setMovements] = useState([]);
+  const [settings, setSettings] = useState({ deliveryFee: 0, gcashReady: false });
+  const [report, setReport] = useState(null);
+  const [customers, setCustomers] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState('');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [activeOrderId, setActiveOrderId] = useState(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All items');
-  const [orderFilter, setOrderFilter] = useState('All orders');
+  const [orderFilter, setOrderFilter] = useState('Needs action');
   const [deliveryMethod, setDeliveryMethod] = useState('Delivery');
   const [paymentMethod, setPaymentMethod] = useState('GCash');
-  const [customer, setCustomer] = useState({ name: 'Mika Reyes', phone: '+63 917 555 0142', address: 'Nasugbu Town Center, Batangas', notes: '' });
+  const [customer, setCustomer] = useState({ name: '', phone: '', email: '', address: '', notes: '' });
   const [proofRef, setProofRef] = useState('');
   const [proofFile, setProofFile] = useState(null);
   const [proofError, setProofError] = useState('');
   const [proofOrderId, setProofOrderId] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [cancelReason, setCancelReason] = useState('');
   const [mobileMenu, setMobileMenu] = useState(false);
   const [productForm, setProductForm] = useState({ name: '', category: 'Fish', price: '', stock: '', size: '', description: '' });
   const [stockForm, setStockForm] = useState({ productId: '', quantity: '', reason: 'Restock', note: '' });
@@ -79,11 +88,18 @@ export default function App() {
           window.location.replace(websiteLoginPath());
           return;
         }
+        if (session.user.mustChangePassword) {
+          setUser(session.user);
+          setRole(session.user.role);
+          setSessionLoading(false);
+          return;
+        }
         const verified = await verifyRole(session.user.role);
         if (!active) return;
         setUser(verified);
         setRole(verified.role);
         setPage(verified.role === 'owner' ? 'dashboard' : 'home');
+        await reloadWorkspace(verified.role);
       } catch {
         if (active) window.location.replace(websiteLoginPath());
       } finally {
@@ -94,18 +110,31 @@ export default function App() {
     return () => { active = false; };
   }, []);
 
-  useEffect(() => localStorage.setItem('aquatica-demo-products', JSON.stringify(products)), [products]);
-  useEffect(() => localStorage.setItem('aquatica-demo-orders', JSON.stringify(orders)), [orders]);
-  useEffect(() => localStorage.setItem('aquatica-demo-movements', JSON.stringify(movements)), [movements]);
   useEffect(() => {
     if (!toast) return undefined;
     const timer = window.setTimeout(() => setToast(''), 3200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    if (!role || !['shop', 'products'].includes(page)) return undefined;
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams();
+        if (query.trim()) params.set('q', query.trim());
+        if (category !== 'All items') params.set('category', category);
+        const catalogPath = role === 'owner' ? '/owner/products' : '/catalog/products';
+        const result = await commerceGet(`${catalogPath}?${params.toString()}`);
+        setProducts(result.products);
+      } catch (error) {
+        setToast(error.message);
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [category, page, query, role]);
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const fee = deliveryMethod === 'Delivery' ? 80 : 0;
+  const fee = deliveryMethod === 'Delivery' ? Number(settings.deliveryFee || 0) : 0;
   const total = subtotal + fee;
   const activeOrder = orders.find((order) => order.id === activeOrderId) || null;
   const paymentOrder = orders.find((order) => order.id === proofOrderId) || null;
@@ -113,12 +142,48 @@ export default function App() {
     const categoryMatches = category === 'All items' || product.category === category;
     return categoryMatches && `${product.name} ${product.category}`.toLowerCase().includes(query.toLowerCase());
   }), [category, products, query]);
-  const filteredOrders = useMemo(() => orders.filter((order) => {
-    const statusMatches = orderFilter === 'All orders' || order.status === orderFilter;
-    return statusMatches && `${order.id} ${order.customer}`.toLowerCase().includes(query.toLowerCase());
-  }), [orderFilter, orders, query]);
-
   const notify = (message) => setToast(message);
+  async function reloadWorkspace(currentRole = role) {
+    if (currentRole === 'customer') {
+      const [catalog, cartData, orderData, profileData, shopSettings, notificationData, notificationCount] = await Promise.all([
+        commerceGet('/catalog/products'),
+        commerceGet('/cart'),
+        commerceGet('/orders'),
+        commerceGet('/account/profile'),
+        commerceGet('/settings/public'),
+        commerceGet('/notifications'),
+        commerceGet('/notifications/unread-count'),
+      ]);
+      setProducts(catalog.products);
+      setCart(cartData.items.map((item) => ({ productId: item.id, name: item.name, price: item.price, quantity: item.quantity })));
+      setOrders(orderData.orders);
+      setCustomer(profileData.profile);
+      setSettings(shopSettings);
+      setNotifications(notificationData.notifications);
+      setUnreadNotifications(notificationCount.count);
+      return;
+    }
+    if (currentRole === 'owner') {
+      const [catalog, inventory, orderData, settingsData, customerData, reportData, notificationData, notificationCount] = await Promise.all([
+        commerceGet('/owner/products'),
+        commerceGet('/owner/inventory'),
+        commerceGet('/owner/orders'),
+        commerceGet('/owner/settings'),
+        commerceGet('/owner/customers'),
+        commerceGet('/owner/reports'),
+        commerceGet('/notifications'),
+        commerceGet('/notifications/unread-count'),
+      ]);
+      setProducts(catalog.products);
+      setMovements(inventory.movements);
+      setOrders(orderData.orders);
+      setSettings(settingsData.settings);
+      setCustomers(customerData.customers);
+      setReport(reportData);
+      setNotifications(notificationData.notifications);
+      setUnreadNotifications(notificationCount.count);
+    }
+  }
   const verifyRole = async (requiredRole) => {
     if (!['customer', 'owner'].includes(requiredRole)) {
       throw new Error('This account does not have an app role.');
@@ -169,118 +234,99 @@ export default function App() {
   const runOwnerAction = async (action) => {
     try {
       await verifyRole('owner');
+      await action();
     } catch (error) {
-      clearSession(error.message);
-      return;
+      notify(error.message);
     }
-    action();
   };
-  const updateOrder = (orderId, updates) => setOrders((items) => items.map((order) => order.id === orderId ? { ...order, ...updates } : order));
-  const moveStock = (productId, amount, reason, orderId = '') => {
-    const product = products.find((item) => item.id === productId);
-    if (!product) return;
-    setProducts((items) => items.map((item) => item.id === productId ? { ...item, stock: item.stock + amount } : item));
-    setMovements((items) => [{
-      id: `MV-${String(Date.now()).slice(-6)}`, product: product.name, productId, change: amount,
-      reason, orderId, date: 'Just now',
-    }, ...items]);
-  };
-  const stockAvailable = (order) => order.items.every((line) => (products.find((item) => item.id === line.productId)?.stock ?? 0) >= line.quantity);
-  const deductStock = (order) => {
-    if (order.stockDeducted) return true;
-    const quantities = order.items.reduce((totals, line) => ({ ...totals, [line.productId]: (totals[line.productId] || 0) + line.quantity }), {});
-    const unavailable = Object.entries(quantities).find(([productId, quantity]) => (products.find((item) => item.id === productId)?.stock ?? 0) < quantity);
-    if (unavailable) {
-      notify(`Not enough stock for ${products.find((item) => item.id === unavailable[0])?.name || 'this item'}.`);
-      return false;
+  const cancelOrder = async (order, reason = 'Cancelled by customer') => {
+    try {
+      if (role === 'owner') {
+        await commerceRequest(`/owner/orders/${order.databaseId}/actions`, 'POST', { action: 'cancel', reason });
+        await reloadWorkspace('owner');
+      } else {
+        await commerceRequest(`/orders/${order.databaseId}/cancel`, 'POST', { reason });
+        await reloadWorkspace('customer');
+      }
+      setModal(null);
+      setCancelReason('');
+      notify(`${order.id} has been cancelled.`);
+    } catch (error) {
+      notify(error.message);
     }
-    Object.entries(quantities).forEach(([productId, quantity]) => moveStock(productId, -quantity, 'Sale', order.id));
-    updateOrder(order.id, { stockDeducted: true });
-    return true;
   };
-  const cancelOrder = (order) => {
-    if (order.stockDeducted) {
-      order.items.forEach((line) => moveStock(line.productId, line.quantity, 'Adjustment', order.id));
+  const addToCart = async (product, quantity = 1) => {
+    try {
+      await commerceRequest('/cart/items', 'POST', { productId: product.id, quantity });
+      await reloadWorkspace('customer');
+      notify(`${product.name} added to cart.`);
+    } catch (error) {
+      notify(error.message);
     }
-    updateOrder(order.id, { status: 'Cancelled', stockDeducted: false });
-    setModal(null);
-    notify(`${order.id} has been cancelled.`);
   };
-  const addToCart = (product, quantity = 1) => {
-    const currentQuantity = cart.find((item) => item.productId === product.id)?.quantity || 0;
-    if (currentQuantity + quantity > product.stock) {
-      notify('There is not enough stock for that quantity.');
-      return;
+  const changeCartQty = async (productId, amount) => {
+    const item = cart.find((line) => line.productId === productId);
+    if (!item) return;
+    try {
+      await commerceRequest(`/cart/items/${encodeURIComponent(productId)}`, 'PATCH', { quantity: Math.max(0, item.quantity + amount) });
+      await reloadWorkspace('customer');
+    } catch (error) {
+      notify(error.message);
     }
-    setCart((items) => {
-      const current = items.find((item) => item.productId === product.id);
-      if (current) return items.map((item) => item.productId === product.id ? { ...item, quantity: item.quantity + quantity } : item);
-      return [...items, { productId: product.id, name: product.name, price: product.price, quantity }];
-    });
-    notify(`${product.name} added to cart.`);
   };
-  const changeCartQty = (productId, amount) => setCart((items) => items.map((item) => {
-    if (item.productId !== productId) return item;
-    const max = products.find((product) => product.id === productId)?.stock || 0;
-    return { ...item, quantity: Math.max(0, Math.min(max, item.quantity + amount)) };
-  }).filter((item) => item.quantity > 0));
-  const placeOrder = (method) => {
-    const unavailable = cart.find((line) => (products.find((item) => item.id === line.productId)?.stock ?? 0) < line.quantity);
-    if (!cart.length || unavailable) {
-      notify(unavailable ? `Not enough stock for ${unavailable.name}.` : 'Your cart is empty.');
-      return;
-    }
-    const id = `AQ-${1050 + orders.length}`;
-    const order = {
-      id, customer: customer.name.trim() || 'Mika Reyes', email: 'mika.reyes@example.com', phone: customer.phone,
-      items: cart.map((line) => ({ ...line })), subtotal, deliveryFee: fee, total, delivery: deliveryMethod,
-      address: deliveryMethod === 'Delivery' ? customer.address : 'Pick up at Aquatica Nasugbu',
-      method, status: 'Pending', paymentStatus: 'Unpaid', date: 'Just now', reference: '', proofName: '',
-      proofReason: '', stockDeducted: false,
-    };
-    setOrders((items) => [order, ...items]);
-    setCart([]);
-    setActiveOrderId(id);
-    if (method === 'GCash') {
-      setProofOrderId(id);
-      setProofRef('');
-      setProofFile(null);
-      setProofError('');
-      navigate('payment');
-    } else {
-      navigate('order-placed');
+  const placeOrder = async (method) => {
+    const paymentMethod = method === 'GCash' ? 'gcash' : method === 'Cash on delivery' ? 'cod' : 'cash_pickup';
+    try {
+      const result = await commerceRequest('/orders', 'POST', {
+        fulfillment: deliveryMethod === 'Delivery' ? 'delivery' : 'pickup',
+        paymentMethod,
+        name: customer.name,
+        phone: customer.phone,
+        address: customer.address,
+        notes: customer.notes,
+      });
+      await reloadWorkspace('customer');
+      setActiveOrderId(result.order.id);
+      if (paymentMethod === 'gcash') {
+        setProofOrderId(result.order.id);
+        setProofRef('');
+        setProofFile(null);
+        setProofError('');
+        setPage('payment');
+      } else {
+        setPage('order-placed');
+      }
+    } catch (error) {
+      notify(error.message);
     }
   };
   const submitProof = async (orderId) => {
-    const reference = proofRef.trim();
-    if (!/^[a-zA-Z0-9]{6,30}$/.test(reference)) {
-      setProofError('Enter a valid GCash reference number (6–30 letters or numbers).');
+    const order = orders.find((item) => item.id === orderId);
+    if (!order || order.status !== 'Pending' || !['Unpaid', 'Rejected'].includes(order.paymentStatus)) {
+      setProofError('This order is not accepting payment proof right now.');
       return;
     }
-    if (orders.some((order) => order.id !== orderId && order.reference === reference)) {
-      setProofError('This reference number has already been used. Check the number and try again.');
+    const reference = proofRef.trim();
+    if (!/^[a-zA-Z0-9]{6,20}$/.test(reference)) {
+      setProofError('Enter a valid GCash reference number (6–20 letters or numbers).');
       return;
     }
     if (!proofFile) {
       setProofError('Upload a screenshot of your GCash payment.');
       return;
     }
-    let proofImage;
     try {
-      proofImage = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Screenshot could not be read.'));
-        reader.onerror = () => reject(reader.error || new Error('Screenshot could not be read.'));
-        reader.readAsDataURL(proofFile);
-      });
+      const form = new FormData();
+      form.append('reference', reference);
+      form.append('proof', proofFile);
+      await commerceRequest(`/orders/${order.databaseId}/payment-proof`, 'POST', form);
+      await reloadWorkspace('customer');
+      setProofError('');
+      setPage('proof-submitted');
+      notify('Payment proof submitted for review.');
     } catch (error) {
-      setProofError('Could not read the payment screenshot. Please choose another image.');
-      return;
+      setProofError(error.message);
     }
-    updateOrder(orderId, { reference, proofName: proofFile.name, proofImage, proofReason: '', paymentStatus: 'Under review' });
-    setProofError('');
-    navigate('proof-submitted');
-    notify('Payment proof submitted for review.');
   };
   const chooseProof = (file) => {
     if (!file) return;
@@ -295,57 +341,32 @@ export default function App() {
       setProofError('');
     }
   };
-  const approvePayment = (order) => {
-    if (!stockAvailable(order)) {
-      notify('There is not enough stock. Adjust inventory before approving.');
-      return;
-    }
-    if (deductStock(order)) {
-      updateOrder(order.id, { paymentStatus: 'Paid', status: 'Preparing', proofReason: '' });
-      setModal(null);
-      notify(`${order.id} payment approved. Stock deducted.`);
-    }
-  };
-  const rejectPayment = (order) => {
-    if (!rejectReason.trim()) return;
-    updateOrder(order.id, { paymentStatus: 'Rejected', status: 'Pending', proofReason: rejectReason.trim() });
+  const ownerOrderAction = async (order, action, values = {}) => {
+    await commerceRequest(`/owner/orders/${order.databaseId}/actions`, 'POST', { action, ...values });
+    await reloadWorkspace('owner');
     setModal(null);
     setRejectReason('');
-    notify(`${order.id} proof rejected. Customer can submit new proof.`);
+    setCancelReason('');
+    notify(`Order ${order.id} updated.`);
   };
-  const confirmOrder = (order) => {
-    if (order.method === 'GCash') {
-      notify('GCash payments must be approved from Payments.');
-      return;
-    }
-    if (!deductStock(order)) return;
-    updateOrder(order.id, { status: order.delivery === 'Pickup' ? 'Ready' : 'Preparing' });
-    setModal(null);
-    notify(`${order.id} confirmed and stock deducted.`);
-  };
-  const markReceived = (order) => {
-    updateOrder(order.id, { paymentStatus: 'Paid', status: 'Completed' });
-    setModal(null);
-    notify(`${order.id} marked paid and completed.`);
-  };
-  const saveProduct = (event) => {
+  const approvePayment = (order) => ownerOrderAction(order, 'approve_proof');
+  const rejectPayment = (order) => ownerOrderAction(order, 'reject_proof', { reason: rejectReason.trim() });
+  const confirmOrder = (order) => ownerOrderAction(order, 'confirm_cash');
+  const markOrderReady = (order, deliveryBy) => ownerOrderAction(order, 'mark_ready', { deliveryBy });
+  const completeOrder = (order) => ownerOrderAction(order, 'complete');
+  const saveProduct = async (event) => {
     event.preventDefault();
-    const product = {
-      id: `custom-${Date.now()}`, name: productForm.name.trim(), category: productForm.category,
-      price: Number(productForm.price), stock: Number(productForm.stock), size: productForm.size || 'Standard',
-      description: productForm.description || 'Freshly stocked at Aquatica Nasugbu.', image: '', emoji: '🐟',
-    };
-    if (!product.name || product.price <= 0 || !Number.isInteger(product.stock) || product.stock < 0) {
-      notify('Enter a product name, valid price, and whole-number stock quantity.');
-      return;
-    }
-    setProducts((items) => [...items, product]);
-    if (product.stock) setMovements((items) => [{ id: `MV-${String(Date.now()).slice(-6)}`, product: product.name, productId: product.id, change: product.stock, reason: 'Restock', orderId: '', date: 'Just now' }, ...items]);
+    const result = await commerceRequest('/owner/products', 'POST', {
+      name: productForm.name.trim(), category: productForm.category,
+      price: Number(productForm.price), stock: Number(productForm.stock),
+      description: productForm.description || 'Freshly stocked at Aquatica Nasugbu.',
+    });
+    await reloadWorkspace('owner');
     setModal(null);
     setProductForm({ name: '', category: 'Fish', price: '', stock: '', size: '', description: '' });
-    notify(`${product.name} added to your products.`);
+    notify('Product added to your catalog.');
   };
-  const saveStock = (event) => {
+  const saveStock = async (event) => {
     event.preventDefault();
     const amount = Number(stockForm.quantity);
     const product = products.find((item) => item.id === stockForm.productId);
@@ -353,11 +374,14 @@ export default function App() {
       notify('Choose a product and enter a whole-number quantity greater than zero.');
       return;
     }
-    if (stockForm.reason === 'Adjustment' && amount > product.stock) {
-      notify(`Only ${product.stock} units are available to adjust.`);
-      return;
-    }
-    moveStock(product.id, stockForm.reason === 'Adjustment' ? -amount : amount, stockForm.reason);
+    await commerceRequest('/owner/inventory/movements', 'POST', {
+      productId: product.id,
+      quantity: stockForm.reason === 'Adjustment' ? -amount : amount,
+      type: stockForm.reason === 'Adjustment' ? 'adjustment' : 'restock',
+      reason: stockForm.reason,
+      note: stockForm.note,
+    });
+    await reloadWorkspace('owner');
     setModal(null);
     notify(`${product.name} stock updated.`);
   };
@@ -367,7 +391,7 @@ export default function App() {
   };
   const chooseOrder = (order) => {
     setActiveOrderId(order.id);
-    if (order.method === 'GCash' && order.paymentStatus !== 'Paid') {
+    if (order.method === 'GCash' && ['Unpaid', 'Rejected'].includes(order.paymentStatus)) {
       setProofOrderId(order.id);
       setProofRef('');
       setProofFile(null);
@@ -387,7 +411,7 @@ export default function App() {
   };
   const openOrderModal = (order) => runOwnerAction(() => {
     setActiveOrderId(order.id);
-    setModal({ type: 'order', order });
+    navigate('orders');
   });
   const openPaymentReview = (order, action) => runOwnerAction(() => {
     if (action === 'reject') {
@@ -412,6 +436,7 @@ export default function App() {
     query, setQuery, orderFilter, setFilter: setOrderFilter, onNavigate: navigate, onProduct: setSelectedProduct,
     onAdd: addToCart, onChangeQty: changeCartQty, onPlaceOrder: placeOrder, deliveryMethod, setDeliveryMethod,
     paymentMethod, setPaymentMethod, checkoutInfo: customer, setCheckoutInfo: setCustomer, onToast: notify,
+    settings,
   };
   let content;
   switch (page) {
@@ -419,36 +444,49 @@ export default function App() {
     case 'shop': content = <ShopPage {...pageProps} products={filteredProducts} cartCount={cartCount} />; break;
     case 'cart': content = <CartPage {...pageProps} />; break;
     case 'checkout': content = <CheckoutPage {...pageProps} onPlaceOrder={placeOrder} />; break;
-    case 'payment': content = <PaymentPage order={paymentOrder} proofRef={proofRef} setProofRef={(value) => { setProofRef(value); setProofError(''); }} proofFile={proofFile} onFile={chooseProof} proofError={proofError} onSubmit={submitProof} onNavigate={navigate} onCopy={copyText} />; break;
+    case 'payment': content = <PaymentPage order={paymentOrder} settings={settings} proofRef={proofRef} setProofRef={(value) => { setProofRef(value); setProofError(''); }} proofFile={proofFile} onFile={chooseProof} proofError={proofError} onSubmit={submitProof} onNavigate={navigate} onCopy={copyText} />; break;
     case 'my-orders': content = <MyOrdersPage orders={orders} customerName={customer.name} onNavigate={navigate} onSelect={chooseOrder} />; break;
-    case 'order-detail': content = <OrderDetailPage order={activeOrder} onNavigate={navigate} onCancel={(order) => setModal({ type: 'cancel-customer', order })} onNewProof={() => { setProofOrderId(activeOrder.id); setProofRef(''); setProofFile(null); navigate('payment'); }} />; break;
+    case 'order-detail': content = <OrderDetailPage order={activeOrder} onNavigate={navigate} onCancel={(order) => { setCancelReason(''); setModal({ type: 'cancel-customer', order }); }} onNewProof={() => { setProofOrderId(activeOrder.id); setProofRef(''); setProofFile(null); navigate('payment'); }} />; break;
     case 'dashboard': content = <DashboardPage orders={orders} products={products} onNavigate={navigate} onOpenOrder={openOrderModal} />; break;
-    case 'orders': content = <OrdersPage orders={filteredOrders} filter={orderFilter} setFilter={setOrderFilter} query={query} setQuery={setQuery} onOpen={openOrderModal} onToast={notify} />; break;
-    case 'payments': content = <PaymentsPage orders={orders} onNavigate={navigate} onReview={openPaymentReview} />; break;
+    case 'orders': content = <OrdersPage
+      orders={orders} filter={orderFilter} setFilter={setOrderFilter} query={query} setQuery={setQuery}
+      selectedOrderId={activeOrderId} setSelectedOrderId={setActiveOrderId}
+      onCheckProof={(order) => openPaymentReview(order, 'preview')}
+      onConfirm={(order) => runOwnerAction(() => confirmOrder(order))}
+      onMarkReady={(order, deliveryBy) => runOwnerAction(() => markOrderReady(order, deliveryBy))}
+      onComplete={(order) => runOwnerAction(() => completeOrder(order))}
+      onCancel={(order) => runOwnerAction(() => { setCancelReason(''); setModal({ type: 'cancel', order }); })}
+    />; break;
     case 'products': content = <ProductsPage products={products} category={category} setCategory={setCategory} query={query} setQuery={setQuery} onAddProduct={() => runOwnerAction(() => setModal({ type: 'product' }))} onStock={(product) => runOwnerAction(() => openStockForm(product))} />; break;
     case 'inventory': content = <InventoryPage products={products} movements={movements} query={query} setQuery={setQuery} onStock={(product, reason) => runOwnerAction(() => openStockForm(product, reason))} />; break;
-    case 'customers': content = <CustomersPage orders={orders} query={query} setQuery={setQuery} onToast={notify} />; break;
-    case 'reports': content = <ReportsPage products={products} onToast={notify} />; break;
-    case 'account': content = <AccountPage customer={customer} setCustomer={setCustomer} onToast={notify} />; break;
-    case 'settings': content = <SettingsPage onToast={notify} />; break;
+    case 'customers': content = <CustomersPage customers={customers} query={query} setQuery={setQuery} onToast={notify} />; break;
+    case 'reports': content = <ReportsPage products={products} report={report} onToast={notify} />; break;
+    case 'account': content = <AccountPage customer={customer} setCustomer={setCustomer} onSave={async () => { try { await commerceRequest('/account/profile', 'PATCH', customer); await reloadWorkspace('customer'); notify('Profile saved.'); } catch (error) { notify(error.message); } }} onToast={notify} />; break;
+    case 'settings': content = <SettingsPage settings={settings} onSave={async (values, qrFile) => { try { await commerceRequest('/owner/settings', 'PUT', values); if (qrFile) { const form = new FormData(); form.append('qr', qrFile); await commerceRequest('/owner/settings/gcash-qr', 'POST', form); } await reloadWorkspace('owner'); notify('Settings saved.'); } catch (error) { notify(error.message); } }} onToast={notify} />; break;
+    case 'notifications': content = <NotificationsPage notifications={notifications} onRead={async (id) => { try { await commerceRequest(`/notifications/${id}/read`, 'PATCH'); await reloadWorkspace(role); } catch (error) { notify(error.message); } }} onReadAll={async () => { try { await commerceRequest('/notifications/read-all', 'POST'); await reloadWorkspace(role); } catch (error) { notify(error.message); } }} />; break;
     case 'order-placed': content = <Confirmation icon="check" title="Order placed!" text={`Thanks, ${customer.name.split(' ')[0] || 'there'}. Your order ${activeOrderId ? `#${activeOrderId}` : ''} is in. We’ll keep you posted as it moves along.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;
     case 'proof-submitted': content = <Confirmation icon="clock" title="Payment received for review" text={`We’ve got your GCash proof for order ${proofOrderId}. Our team will check it and update your order soon.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;
     default: content = <DashboardPage orders={orders} products={products} onNavigate={navigate} onOpenOrder={openOrderModal} />;
   }
-  const pendingCount = orders.filter((order) => order.status === 'Pending').length;
-  const reviewCount = orders.filter((order) => order.paymentStatus === 'Under review').length;
+  const pendingCount = orders.filter(orderNeedsAction).length;
   if (sessionLoading) return <main className="auth-loading"><span className="auth-loading-mark">A</span><p>Checking your account…</p></main>;
   if (!user || !role) return <main className="auth-loading"><span className="auth-loading-mark">A</span><p>Redirecting to the website sign in…</p></main>;
+  if (user.mustChangePassword) {
+    return <FirstLoginPasswordPage onComplete={() => {
+      setUser({ ...user, mustChangePassword: false });
+      setPage('dashboard');
+    }} />;
+  }
   if (accessLoading) return <main className="auth-loading"><span className="auth-loading-mark">A</span><p>Verifying access…</p></main>;
 
   return <div className={`app-shell ${mobileMenu ? 'mobile-nav-open' : ''}`}>
-    <Sidebar role={role} page={page} user={user} onNavigate={navigate} cartCount={cartCount} reviewCount={reviewCount} pendingCount={pendingCount} mobileMenu={mobileMenu} onClose={() => setMobileMenu(false)} onLogout={logout} />
+    <Sidebar role={role} page={page} user={user} onNavigate={navigate} cartCount={cartCount} pendingCount={pendingCount} mobileMenu={mobileMenu} onClose={() => setMobileMenu(false)} onLogout={logout} />
     <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button><div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
-      <div className="topbar-actions"><span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" onClick={() => notify('You’re all caught up on notifications.')}><Icon name="bell" size={18} /><i /></button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
+      <div className="topbar-actions"><span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setPage(page === 'notifications' ? (role === 'owner' ? 'dashboard' : 'home') : 'notifications')}><Icon name="bell" size={18} />{unreadNotifications > 0 && <i />}</button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
     </header><div className="content-area">{selectedProduct ? <ProductDetails product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={addToCart} /> : content}</div>
     <footer className="app-footer"><span>© 2026 Aquatica Nasugbu</span><span>Made for little pieces of the ocean <i>✳</i></span></footer></main>
     {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}<button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={15} /></button></div>}
-    {modal && <AppModal modal={modal} onClose={() => setModal(null)} onRejectOpen={(order) => { if (order.__cancel) setModal({ type: 'cancel', order }); else openPaymentReview(order, 'reject'); }} productForm={productForm} setProductForm={setProductForm} stockForm={stockForm} setStockForm={setStockForm} products={products} rejectReason={rejectReason} setRejectReason={setRejectReason} onSaveProduct={(event) => { event.preventDefault(); runOwnerAction(() => saveProduct(event)); }} onSaveStock={(event) => { event.preventDefault(); runOwnerAction(() => saveStock(event)); }} onReject={(order) => runOwnerAction(() => rejectPayment(order))} onApprove={(order) => runOwnerAction(() => approvePayment(order))} onConfirm={(order) => runOwnerAction(() => confirmOrder(order))} onReceived={(order) => runOwnerAction(() => markReceived(order))} onCancel={(order) => role === 'owner' ? runOwnerAction(() => cancelOrder(order)) : cancelOrder(order)} onStatus={(order, status) => runOwnerAction(() => { updateOrder(order.id, { status }); setModal(null); notify(`${order.id} marked ${status.toLowerCase()}.`); })} />}
+    {modal && <AppModal modal={modal} onClose={() => setModal(null)} onRejectOpen={(order) => openPaymentReview(order, 'reject')} productForm={productForm} setProductForm={setProductForm} stockForm={stockForm} setStockForm={setStockForm} products={products} rejectReason={rejectReason} setRejectReason={setRejectReason} cancelReason={cancelReason} setCancelReason={setCancelReason} onSaveProduct={(event) => { event.preventDefault(); runOwnerAction(() => saveProduct(event)); }} onSaveStock={(event) => { event.preventDefault(); runOwnerAction(() => saveStock(event)); }} onReject={(order) => runOwnerAction(() => rejectPayment(order))} onApprove={(order) => runOwnerAction(() => approvePayment(order))} onCancel={(order) => cancelOrder(order, cancelReason)} />}
   </div>;
 }
 
@@ -467,7 +505,7 @@ function Confirmation({ icon, title, text, onOrders, onShop }) {
   return <div className="centered-state"><span className="success-icon"><Icon name={icon} size={24} /></span><div className="eyebrow">AQUATICA NASUGBU</div><h1>{title}</h1><p>{text}</p><div className="centered-actions"><Button onClick={onOrders}>View my orders <Icon name="arrow" size={16} /></Button><button className="text-button" onClick={onShop}>Continue shopping</button></div></div>;
 }
 
-function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, stockForm, setStockForm, products, rejectReason, setRejectReason, onSaveProduct, onSaveStock, onReject, onApprove, onConfirm, onReceived, onCancel, onStatus }) {
+function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, stockForm, setStockForm, products, rejectReason, setRejectReason, cancelReason, setCancelReason, onSaveProduct, onSaveStock, onReject, onApprove, onConfirm, onReceived, onCancel, onStatus }) {
   const title = modal.type === 'order' ? `Order ${modal.order.id}` : {
     product: 'Add a product', stock: stockForm.reason === 'Adjustment' ? 'Adjust stock' : 'Restock product',
     reject: 'Reject payment proof', proof: 'Payment proof',
@@ -475,7 +513,7 @@ function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, s
     'cancel-customer': 'Cancel this order?',
   }[modal.type];
   if (modal.type === 'cancel-customer' || modal.type === 'cancel') {
-    return <Modal title="Cancel this order?" onClose={onClose}><div className="modal-form"><p className="modal-description">Cancel order <b>{modal.order.id}</b>? This action will be recorded in the order history.</p><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Keep order</Button><Button variant="danger" onClick={() => onCancel(modal.order)}>Cancel order</Button></div></div></Modal>;
+    return <Modal title="Cancel this order?" onClose={onClose}><div className="modal-form"><p className="modal-description">Cancel order <b>{modal.order.id}</b>? This action will be recorded in the order history.</p>{modal.type === 'cancel' && <Field label="Cancellation reason"><textarea className="input textarea" required value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} /></Field>}<div className="modal-actions"><Button variant="secondary" onClick={onClose}>Keep order</Button><Button variant="danger" disabled={modal.type === 'cancel' && !cancelReason.trim()} onClick={() => onCancel(modal.order)}>Cancel order</Button></div></div></Modal>;
   }
   return <Modal title={title} onClose={onClose} wide={['order', 'proof'].includes(modal.type)}>
     {modal.type === 'product' && <form className="modal-form" onSubmit={onSaveProduct}><div className="form-grid">
@@ -493,7 +531,7 @@ function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, s
       <div className="inline-info"><span className="info-mark">i</span><span>This change will be added to your stock movement history.</span></div><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit">Save movement</Button></div>
     </form>}
     {modal.type === 'reject' && <div className="modal-form"><p className="modal-description">Let {modal.order.customer} know what needs to be corrected. They can submit new payment proof once you reject this one.</p><Field label="Reason for rejection"><textarea className="input textarea" autoFocus placeholder="e.g. The amount on the screenshot doesn't match the order total." value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} /></Field><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Go back</Button><Button variant="danger" disabled={!rejectReason.trim()} onClick={() => onReject(modal.order)}>Reject payment proof</Button></div></div>}
-    {modal.type === 'proof' && <div className="proof-modal-content"><div className="receipt-large proof-receipt">{modal.order.proofImage ? <img className="proof-image" src={modal.order.proofImage} alt={`Payment screenshot for ${modal.order.id}`} /> : <><span className="receipt-logo">G</span><span className="receipt-success">Payment successful</span><strong>{money(modal.order.total)}</strong><span>To Aquatica Nasugbu · 0917 555 0142</span><div /><span>Reference number</span><b>{modal.order.reference || 'Not submitted'}</b><span>{modal.order.date}</span></>}</div><div className="proof-modal-info"><span className="eyebrow">CUSTOMER SUBMISSION</span><h3>{modal.order.customer}</h3><p>{modal.order.proofName || 'No screenshot attached'}</p><div className="detail-info-row"><span>Amount due</span><b>{money(modal.order.total)}</b></div><div className="detail-info-row"><span>GCash reference</span><b>{modal.order.reference || '—'}</b></div>{modal.order.paymentStatus === 'Under review' && <div className="verification-actions"><Button variant="danger-soft" onClick={() => onRejectOpen(modal.order)}>Reject</Button><Button onClick={() => onApprove(modal.order)}><Icon name="check" size={16} /> Approve</Button></div>}</div></div>}
+    {modal.type === 'proof' && <div className="proof-modal-content"><div className="receipt-large proof-receipt">{modal.order.proofImageUrl ? <img className="proof-image" src={commercePath(modal.order.proofImageUrl)} alt={`Payment screenshot for ${modal.order.id}`} /> : <span>No payment screenshot is attached.</span>}</div><div className="proof-modal-info"><span className="eyebrow">CUSTOMER SUBMISSION</span><h3>{modal.order.customer}</h3><p>{modal.order.proofName || 'No screenshot attached'}</p><div className="detail-info-row"><span>Amount due</span><b>{money(modal.order.total)}</b></div><div className="detail-info-row"><span>GCash reference</span><b>{modal.order.reference || '—'}</b></div>{modal.order.paymentStatus === 'Under review' && <div className="verification-actions"><Button variant="danger-soft" onClick={() => onRejectOpen(modal.order)}>Reject</Button><Button onClick={() => onApprove(modal.order)}><Icon name="check" size={16} /> Approve</Button></div>}</div></div>}
     {modal.type === 'order' && <div className="owner-order-detail"><div className="owner-order-columns"><section className="detail-main"><div className="detail-status"><span>Order status</span><span className="status-label">{modal.order.status}</span><div className="step-track"><span className="step-done">Placed</span><i /><span>{modal.order.delivery === 'Pickup' ? 'Ready' : 'Preparing'}</span><i /><span>Completed</span></div></div><div className="detail-block"><h3>Items ordered</h3>{modal.order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.name} <i>× {item.quantity}</i></span><b>{money(item.price * item.quantity)}</b></div>)}</div><div className="detail-block"><h3>Customer details</h3><div className="detail-info-row"><span>Customer</span><b>{modal.order.customer}</b></div><div className="detail-info-row"><span>Phone</span><b>{modal.order.phone}</b></div><div className="detail-info-row"><span>{modal.order.delivery}</span><b>{modal.order.address}</b></div></div></section><aside className="owner-order-side"><div className="panel owner-summary"><h3>Payment summary</h3><div className="detail-info-row"><span>Total</span><b>{money(modal.order.total)}</b></div><div className="detail-info-row"><span>Method</span><b>{modal.order.method}</b></div><div className="detail-info-row"><span>Payment status</span><b>{modal.order.paymentStatus}</b></div></div><div className="owner-order-actions"><h3>Next step</h3>{modal.order.status === 'Pending' && modal.order.method !== 'GCash' && <Button className="button-full" onClick={() => onConfirm(modal.order)}>Confirm & deduct stock</Button>}{modal.order.method === 'GCash' && modal.order.paymentStatus === 'Under review' && <Button className="button-full" onClick={() => onApprove(modal.order)}>Approve payment</Button>}{modal.order.status === 'Preparing' && <Button variant="secondary" className="button-full" onClick={() => onStatus(modal.order, 'Ready')}>Mark as ready</Button>}{['Preparing', 'Ready'].includes(modal.order.status) && modal.order.paymentStatus !== 'Paid' && <Button className="button-full" onClick={() => onReceived(modal.order)}>Mark payment received</Button>}{['Preparing', 'Ready'].includes(modal.order.status) && modal.order.paymentStatus === 'Paid' && <Button className="button-full" onClick={() => onStatus(modal.order, 'Completed')}>Mark completed</Button>}{!['Completed', 'Cancelled'].includes(modal.order.status) && <Button variant="danger-soft" className="button-full" onClick={() => onRejectOpen({ ...modal.order, __cancel: true })}>Cancel order</Button>}</div></aside></div></div>}
   </Modal>;
 }

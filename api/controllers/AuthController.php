@@ -418,7 +418,7 @@ final class AuthController
         $user = null;
         if ($email !== '') {
             $find = auth_db()->prepare(
-                'SELECT id, name, email, password_hash, role, session_version
+                'SELECT id, name, email, password_hash, role, session_version, must_change_password
                  FROM users WHERE email = :email LIMIT 1'
             );
             $find->execute(['email' => $email]);
@@ -457,6 +457,7 @@ final class AuthController
         $_SESSION = [
             'user_id' => (int) $user['id'],
             'session_version' => (int) $user['session_version'],
+            'must_change_password' => (bool) $user['must_change_password'],
             'last_activity' => time(),
             'csrf_token' => bin2hex(random_bytes(32)),
         ];
@@ -464,6 +465,7 @@ final class AuthController
         json_response([
             'message' => 'You are logged in.',
             'role' => auth_role_for_app($user['role']),
+            'mustChangePassword' => (bool) $user['must_change_password'],
             'csrfToken' => $_SESSION['csrf_token'],
         ]);
     }
@@ -477,6 +479,7 @@ final class AuthController
             'name' => $user['name'],
             'email' => $user['email'],
             'role' => auth_role_for_app($user['role']),
+            'mustChangePassword' => (bool) ($_SESSION['must_change_password'] ?? false),
         ] : null]);
     }
 
@@ -491,7 +494,57 @@ final class AuthController
     {
         require_method('GET');
         $user = require_auth_role('owner');
+        if (!empty($_SESSION['must_change_password'])) {
+            json_response(['message' => 'Change your temporary password before accessing owner features.'], 403);
+        }
         json_response(['user' => ['name' => $user['name'], 'role' => $user['role']]]);
+    }
+
+    public function changePassword(): never
+    {
+        require_method('POST');
+        require_csrf();
+        $user = current_auth_user();
+        if ($user === null) {
+            json_response(['message' => 'Please log in to continue.'], 401);
+        }
+        if ($user['role'] !== 'owner' || empty($_SESSION['must_change_password'])) {
+            json_response(['message' => 'This password-change action is only available for the initial owner setup.'], 403);
+        }
+
+        $data = request_json();
+        $currentPassword = is_string($data['currentPassword'] ?? null) ? $data['currentPassword'] : '';
+        $password = $data['password'] ?? null;
+        if (!self::validPassword($password)
+            || !is_string($data['confirmPassword'] ?? null)
+            || !hash_equals($password, $data['confirmPassword'])) {
+            json_response(['message' => 'Enter a matching password of at least 8 characters.'], 422);
+        }
+
+        $db = auth_db();
+        $find = $db->prepare('SELECT password_hash FROM users WHERE id = :id LIMIT 1');
+        $find->execute(['id' => $user['id']]);
+        $passwordHash = $find->fetchColumn();
+        if (!is_string($passwordHash) || !password_verify($currentPassword, $passwordHash)) {
+            json_response(['message' => 'The current password is incorrect.'], 422);
+        }
+        if (password_verify($password, $passwordHash)) {
+            json_response(['message' => 'Choose a password different from your current password.'], 422);
+        }
+
+        $update = $db->prepare(
+            'UPDATE users
+             SET password_hash = :password_hash, must_change_password = 0,
+                 session_version = session_version + 1
+             WHERE id = :id'
+        );
+        $update->execute(['password_hash' => hash_password($password), 'id' => $user['id']]);
+        $version = $db->prepare('SELECT session_version FROM users WHERE id = :id');
+        $version->execute(['id' => $user['id']]);
+        $_SESSION['session_version'] = (int) $version->fetchColumn();
+        $_SESSION['must_change_password'] = false;
+        session_regenerate_id(true);
+        json_response(['message' => 'Your password has been changed.']);
     }
 
     public function logout(): never

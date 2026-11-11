@@ -7,7 +7,7 @@ function PayOption({ selected, onClick, title, subtitle, mark, disabled }) {
   </button>;
 }
 
-export default function CheckoutPage({ cart, subtotal, fee, total, deliveryMethod, setDeliveryMethod, paymentMethod, setPaymentMethod, checkoutInfo, setCheckoutInfo, onPlaceOrder, onNavigate }) {
+export default function CheckoutPage({ cart, subtotal, fee, total, deliveryMethod, setDeliveryMethod, paymentMethod, setPaymentMethod, checkoutInfo, setCheckoutInfo, onPlaceOrder, onNavigate, settings }) {
   return <>
     <SectionTitle eyebrow="ONE MORE STEP" title="Checkout" action={<Button variant="secondary" onClick={() => onNavigate('cart')}><Icon name="back" size={16} /> Back to cart</Button>} />
     <div className="checkout-layout"><div className="checkout-main">
@@ -22,19 +22,19 @@ export default function CheckoutPage({ cart, subtotal, fee, total, deliveryMetho
           <Field label="Phone number"><input className="input" value={checkoutInfo.phone} onChange={(event) => setCheckoutInfo({ ...checkoutInfo, phone: event.target.value })} /></Field>
           <Field label="Delivery address" className="field-full"><input className="input" value={checkoutInfo.address} onChange={(event) => setCheckoutInfo({ ...checkoutInfo, address: event.target.value })} /></Field>
           <Field label="Order note (optional)" className="field-full"><textarea className="input textarea" placeholder="Anything we should know?" value={checkoutInfo.notes} onChange={(event) => setCheckoutInfo({ ...checkoutInfo, notes: event.target.value })} /></Field>
-        </div> : <div className="pickup-address"><Icon name="pin" size={18} /><span><b>Aquatica Nasugbu</b><small>Nasugbu, Batangas · We’ll let you know when your order is ready.</small></span></div>}
+        </div> : <div className="pickup-address"><Icon name="pin" size={18} /><span><b>{settings.shopName || 'Aquatica Nasugbu'}</b><small>{settings.shopAddress || 'Nasugbu, Batangas'} · We’ll let you know when your order is ready.</small></span></div>}
       </section>
       <section className="panel form-panel">
         <div className="panel-heading"><span className="step-number">02</span><div><h2>Payment method</h2><p>Choose how you’d like to pay for this order.</p></div></div>
         <div className="payment-options">
-          <PayOption selected={paymentMethod === 'GCash'} onClick={() => setPaymentMethod('GCash')} title="GCash" subtitle="Pay now with GCash" mark="G" />
+          <PayOption selected={paymentMethod === 'GCash'} onClick={() => setPaymentMethod('GCash')} title="GCash" subtitle={settings.gcashReady ? 'Pay now with GCash' : 'Unavailable until shop payment details are configured'} mark="G" disabled={!settings.gcashReady} />
           <PayOption selected={paymentMethod === 'Cash on delivery'} onClick={() => setPaymentMethod('Cash on delivery')} title="Cash on delivery" subtitle="Pay when your order arrives" mark="₱" disabled={deliveryMethod === 'Pickup'} />
           <PayOption selected={paymentMethod === 'Cash at the shop'} onClick={() => setPaymentMethod('Cash at the shop')} title="Cash at the shop" subtitle="Pay when you collect your order" mark="₱" disabled={deliveryMethod === 'Delivery'} />
         </div>
         {paymentMethod === 'GCash' && <div className="inline-info"><span className="info-mark">i</span><span>You’ll see the exact amount, GCash details and upload a payment screenshot after placing your order.</span></div>}
       </section>
     </div>
-    <OrderSummary items={cart} subtotal={subtotal} fee={fee} total={total} action={<Button className="button-full" disabled={!cart.length || (deliveryMethod === 'Delivery' && !checkoutInfo.address.trim())} onClick={() => onPlaceOrder(paymentMethod)}>Place order <Icon name="arrow" size={16} /></Button>} />
+    <OrderSummary items={cart} subtotal={subtotal} fee={fee} total={total} action={<Button className="button-full" disabled={!cart.length || (deliveryMethod === 'Delivery' && (!checkoutInfo.address.trim() || !checkoutInfo.phone.trim())) || (paymentMethod === 'GCash' && !settings.gcashReady)} onClick={() => onPlaceOrder(paymentMethod)}>Place order <Icon name="arrow" size={16} /></Button>} />
     </div>
   </>;
 }

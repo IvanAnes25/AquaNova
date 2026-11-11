@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash VARCHAR(255) NOT NULL,
     role ENUM('customer', 'owner', 'admin') NOT NULL DEFAULT 'customer',
     session_version INT UNSIGNED NOT NULL DEFAULT 0,
+    email_verified_at DATETIME NULL,
+    must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+    failed_attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    locked_until DATETIME NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY users_email_unique (email)

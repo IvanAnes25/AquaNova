@@ -12,6 +12,7 @@ export default function OrderDetailPage({ order, onNavigate, onCancel, onNewProo
       <div className="detail-block"><h3>Items</h3>{order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.name} <i>× {item.quantity}</i></span><b>{money(item.price * item.quantity)}</b></div>)}</div>
       <div className="detail-block"><h3>Delivery & payment</h3><div className="detail-info-row"><span>{order.delivery === 'Delivery' ? 'Delivering to' : 'Pickup location'}</span><b>{order.address}</b></div><div className="detail-info-row"><span>Payment method</span><b>{order.method}</b></div><div className="detail-info-row"><span>Payment status</span><Status>{order.paymentStatus}</Status></div></div>
       {order.paymentStatus === 'Rejected' && <div className="error-callout"><b>Payment proof needs an update</b><span>{order.proofReason}</span><Button variant="secondary" onClick={onNewProof}>Upload new proof</Button></div>}
+      {order.customerNotice && <div className="customer-order-notice">{order.customerNotice}</div>}
       {order.status === 'Pending' && <Button variant="danger-soft" onClick={() => onCancel(order)}>Cancel order</Button>}
     </div><aside className="panel order-summary"><h2>Order total</h2><div className="summary-row"><span>Subtotal</span><b>{money(order.subtotal)}</b></div><div className="summary-row"><span>Delivery</span><b>{order.deliveryFee ? money(order.deliveryFee) : 'Free'}</b></div><div className="summary-total"><span>Total</span><b>{money(order.total)}</b></div></aside></div>
   </>;
