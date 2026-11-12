@@ -55,6 +55,15 @@ $sampleProducts = [
     ['Natural River Pebbles', 'Substrate & decor', 'Washed decorative pebbles for freshwater aquascapes.', 250, 10],
     ['Java Fern', 'Plants & decor', 'A hardy aquatic plant suitable for attaching to aquarium decor.', 180, 7],
     ['Anubias Nana', 'Plants & decor', 'A compact, slow-growing aquatic plant for planted tanks.', 240, 6],
+    ['Red Betta', 'Freshwater fish', 'A colorful betta for a suitable, peaceful aquarium.', 320, 5],
+    ['Spark Guppy', 'Freshwater fish', 'A lively guppy for a compatible community aquarium.', 180, 8],
+    ['Oranda Goldfish', 'Freshwater fish', 'A fancy goldfish that needs a spacious, well-filtered tank.', 450, 4],
+    ['30-Gallon Aquarium', 'Aquariums', 'A glass aquarium for a home freshwater setup.', 6800, 4],
+    ['60-Gallon Aquarium', 'Aquariums', 'A larger aquarium for a carefully planned fish community.', 12700, 3],
+    ['Starter Filter Kit', 'Equipment', 'A basic filter kit for maintaining aquarium water quality.', 960, 8],
+    ['Aquarium Heater', 'Equipment', 'An adjustable heater for suitable tropical aquariums.', 650, 6],
+    ['Aquarium Net', 'Tools & maintenance', 'A small net for routine aquarium care.', 120, 10],
+    ['Water Conditioner', 'Food & care', 'A water conditioner for aquarium setup and maintenance.', 220, 10],
 ];
 
 try {

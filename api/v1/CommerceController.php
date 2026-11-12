@@ -109,7 +109,65 @@ final class CommerceController
 
     private function orderRow(array $row): array
     {
-        $items = $this->orderItems((int) $row['id']);
+        return $this->orderRowData(
+            $row,
+            $this->orderItems((int) $row['id']),
+            $this->latestProof((int) $row['id'])
+        );
+    }
+
+    private function orderRows(array $rows): array
+    {
+        if ($rows === []) {
+            return [];
+        }
+
+        $ids = array_map(static fn(array $row): int => (int) $row['id'], $rows);
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+
+        $itemsStatement = $this->db()->prepare(
+            "SELECT order_id, product_id, name_snapshot, price_snapshot, qty
+             FROM order_items WHERE order_id IN ($placeholders) ORDER BY order_id, id"
+        );
+        $itemsStatement->execute($ids);
+        $itemsByOrder = [];
+        foreach ($itemsStatement->fetchAll() as $item) {
+            $itemsByOrder[(int) $item['order_id']][] = [
+                'productId' => (string) ($item['product_id'] ?? ''),
+                'name' => $item['name_snapshot'],
+                'price' => (float) $item['price_snapshot'],
+                'quantity' => (int) $item['qty'],
+            ];
+        }
+
+        $proofStatement = $this->db()->prepare(
+            "SELECT proof.order_id, proof.id, proof.reference_no, proof.image_path,
+                    proof.reject_reason, proof.status
+             FROM payment_proofs proof
+             JOIN (
+                 SELECT order_id, MAX(id) AS id
+                 FROM payment_proofs WHERE order_id IN ($placeholders)
+                 GROUP BY order_id
+             ) latest ON latest.id = proof.id"
+        );
+        $proofStatement->execute($ids);
+        $proofsByOrder = [];
+        foreach ($proofStatement->fetchAll() as $proof) {
+            $proofsByOrder[(int) $proof['order_id']] = $proof;
+        }
+
+        return array_map(
+            fn(array $row): array => $this->orderRowData(
+                $row,
+                $itemsByOrder[(int) $row['id']] ?? [],
+                $proofsByOrder[(int) $row['id']] ?? null
+            ),
+            $rows
+        );
+    }
+
+    private function orderRowData(array $row, array $items, ?array $proof): array
+    {
         $address = json_decode((string) ($row['delivery_address_snapshot'] ?? ''), true);
         $method = match ($row['payment_method_v2']) {
             'gcash' => 'GCash',
@@ -125,7 +183,6 @@ final class CommerceController
             'rejected' => 'Rejected',
             default => 'Unpaid',
         };
-        $proof = $this->latestProof((int) $row['id']);
         return [
             'id' => $row['order_no'],
             'databaseId' => (int) $row['id'],
@@ -360,7 +417,7 @@ final class CommerceController
              FROM orders o JOIN users u ON u.id = o.user_id WHERE o.user_id = :id ORDER BY o.created_at DESC'
         );
         $statement->execute(['id' => $user['id']]);
-        json_response(['orders' => array_map(fn(array $row): array => $this->orderRow($row), $statement->fetchAll())]);
+        json_response(['orders' => $this->orderRows($statement->fetchAll())]);
     }
 
     public function createOrder(): never
@@ -773,7 +830,7 @@ final class CommerceController
         $sql .= " ORDER BY CASE WHEN o.order_status = 'pending' THEN 0 ELSE 1 END, o.created_at ASC";
         $statement = $this->db()->prepare($sql);
         $statement->execute($status === null ? [] : ['status' => $status]);
-        $orders = array_map(fn(array $row): array => $this->orderRow($row), $statement->fetchAll());
+        $orders = $this->orderRows($statement->fetchAll());
         $counts = $this->db()->query(
             "SELECT order_status, COUNT(*) AS count FROM orders GROUP BY order_status"
         )->fetchAll();
