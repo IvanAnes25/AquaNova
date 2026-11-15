@@ -18,6 +18,9 @@ export default function SettingsPage({ settings, onSave }) {
       deliveryFee: Number(values.deliveryFee),
       gcashName: values.gcashName,
       gcashNumber: values.gcashNumber,
+      gcashEnabled: values.gcashEnabled !== false,
+      codEnabled: values.codEnabled !== false,
+      cashPickupEnabled: values.cashPickupEnabled !== false,
       autoCancelHours: values.autoCancelHours === '' || values.autoCancelHours == null
         ? null
         : Number(values.autoCancelHours),
@@ -37,6 +40,13 @@ export default function SettingsPage({ settings, onSave }) {
           <Field label="Auto-cancel pending orders (hours)"><input className="input" min="1" max="720" step="1" type="number" value={values.autoCancelHours ?? ''} onChange={(event) => update('autoCancelHours', event.target.value)} /><span className="field-hint">Unpaid orders expire after this many hours. Rejected orders expire this long after rejection. Proofs Under review are never auto-cancelled. Leave blank to disable.</span></Field>
           <Field label="GCash recipient name"><input className="input" value={values.gcashName || ''} onChange={(event) => update('gcashName', event.target.value)} /></Field>
           <Field label="GCash number"><input className="input" value={values.gcashNumber || ''} onChange={(event) => update('gcashNumber', event.target.value)} /></Field>
+          <Field label="Payment options" className="field-full">
+            <div className="settings-payment-options">
+              <label><input type="checkbox" checked={values.gcashEnabled !== false} onChange={(event) => update('gcashEnabled', event.target.checked)} /> GCash</label>
+              <label><input type="checkbox" checked={values.codEnabled !== false} onChange={(event) => update('codEnabled', event.target.checked)} /> Cash on delivery</label>
+              <label><input type="checkbox" checked={values.cashPickupEnabled !== false} onChange={(event) => update('cashPickupEnabled', event.target.checked)} /> Cash at the shop</label>
+            </div>
+          </Field>
           <Field label="GCash QR image (JPG/PNG, max 2 MB)" className="field-full">
             <input className="input" type="file" accept="image/jpeg,image/png" onChange={(event) => setQrFile(event.target.files?.[0] || null)} />
             {values.gcashQrUrl && <img className="settings-qr-preview" src={commercePath(values.gcashQrUrl)} alt="Configured shop GCash QR" />}

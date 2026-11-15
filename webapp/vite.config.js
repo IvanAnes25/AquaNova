@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 
+const apiProxyTarget = process.env.AQUATICA_API_PROXY_TARGET || 'http://localhost';
+
 export default defineConfig(({ command }) => ({
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [react()],
@@ -11,7 +13,7 @@ export default defineConfig(({ command }) => ({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost',
+        target: apiProxyTarget,
         changeOrigin: true,
         rewrite: (path) => `/AquaNova${path}`,
       },

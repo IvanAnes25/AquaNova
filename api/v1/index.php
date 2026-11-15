@@ -83,7 +83,7 @@ try {
         $controller->downloadReport();
     } elseif ($segments === ['owner', 'settings'] && $method === 'GET') {
         $controller->ownerSettings();
-    } elseif ($segments === ['owner', 'settings'] && $method === 'PUT') {
+    } elseif ($segments === ['owner', 'settings'] && in_array($method, ['PATCH', 'PUT'], true)) {
         $controller->updateOwnerSettings();
     } elseif ($segments === ['owner', 'settings', 'gcash-qr'] && $method === 'POST') {
         $controller->uploadGcashQr();

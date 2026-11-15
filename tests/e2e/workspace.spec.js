@@ -1,0 +1,422 @@
+import { execFileSync } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { expect, test } from '@playwright/test';
+
+const databaseName = process.env.AQUATICA_TEST_DB_NAME;
+if (!databaseName || !/^aquanova_test_[a-z0-9_]+$/.test(databaseName)
+  || process.env.DB_NAME !== databaseName) {
+  throw new Error('Real API browser tests require matching isolated AQUATICA_TEST_DB_NAME and DB_NAME values.');
+}
+
+const fixtureScript = resolve('tests/e2e/real_data_fixture.php');
+const apiOrigin = new URL(process.env.AQUATICA_E2E_URL || 'http://127.0.0.1:5174/webapp/').origin;
+const png = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==',
+  'base64',
+);
+let fixture;
+
+function runFixture(action, data = null, ...args) {
+  const env = {
+    ...process.env,
+    APP_ENV: 'local',
+    DB_NAME: databaseName,
+    AQUATICA_TEST_DB_NAME: databaseName,
+  };
+  const commandArgs = [fixtureScript, action];
+  if (data) commandArgs.push(JSON.stringify(data));
+  commandArgs.push(...args.map(String));
+  const output = execFileSync('php', ['-d', 'display_errors=0', ...commandArgs], { encoding: 'utf8', env });
+  return JSON.parse(output);
+}
+
+test.beforeEach(() => {
+  fixture = runFixture('setup');
+});
+
+test.afterEach(() => {
+  if (fixture) {
+    runFixture('cleanup', fixture);
+    fixture = undefined;
+  }
+});
+
+async function signIn(page, user) {
+  const request = page.context().request;
+  const csrfResponse = await request.get(`${apiOrigin}/api/auth/csrf.php`);
+  expect(csrfResponse.status()).toBe(200);
+  const csrf = await csrfResponse.json();
+  const loginResponse = await request.post(`${apiOrigin}/api/auth/login.php`, {
+    data: { email: user.email, password: user.password },
+    headers: { 'X-CSRF-Token': csrf.csrfToken },
+  });
+  expect(loginResponse.status()).toBe(200);
+  const sessionResponse = await request.get(`${apiOrigin}/api/auth/session.php`);
+  const session = await sessionResponse.json();
+  expect(session.user.role).toBe(user.role);
+  await page.goto('/');
+  await expect(page.locator('.sidebar .nav-link-active')).toBeVisible();
+}
+
+async function newSignedInPage(browser, user) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await signIn(page, user);
+  return { context, page };
+}
+
+async function navigate(page, label, width = null) {
+  const viewportWidth = width ?? await page.evaluate(() => window.innerWidth);
+  if (viewportWidth <= 900) {
+    const sidebar = page.locator('.sidebar');
+    await page.waitForFunction(() => window.matchMedia('(max-width: 900px)').matches);
+    const menuOpen = await page.locator('.app-shell').evaluate((element) => element.classList.contains('mobile-nav-open'));
+    if (!menuOpen) {
+      await page.getByRole('button', { name: 'Open navigation' }).click();
+    }
+    await expect(page.locator('.app-shell')).toHaveClass(/mobile-nav-open/);
+    await expect(sidebar).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
+  }
+  await page.locator('.sidebar .nav-link').filter({ hasText: new RegExp(`^${label}`) }).click();
+}
+
+async function api(page, path, method = 'GET', data = undefined) {
+  return page.evaluate(async ({ path, method, data }) => {
+    const headers = data === undefined ? {} : { 'Content-Type': 'application/json' };
+    if (method !== 'GET') {
+      const csrfResponse = await fetch('/api/auth/csrf.php');
+      const csrf = await csrfResponse.json();
+      headers['X-CSRF-Token'] = csrf.csrfToken;
+    }
+    const response = await fetch(path, {
+      method,
+      headers,
+      body: data === undefined ? undefined : JSON.stringify(data),
+    });
+    const body = await response.json().catch(() => null);
+    return { status: response.status, body };
+  }, { path, method, data });
+}
+
+async function placeOrder(page, product, { fulfillment = 'Delivery', payment = 'GCash' } = {}) {
+  await navigate(page, 'Shop');
+  await page.getByRole('button', { name: `Add ${product.name} to cart` }).click();
+  await navigate(page, 'Cart');
+  await page.getByRole('button', { name: 'Continue to checkout' }).click();
+  if (fulfillment === 'Pickup') {
+    await page.getByRole('button', { name: /Pick up at shop/ }).click();
+  } else {
+    await page.getByRole('button', { name: /^Delivery/ }).click();
+    await page.getByLabel('Delivery address').fill('42 Test Ocean Road');
+  }
+  const option = payment === 'GCash' ? 'GCash'
+    : payment === 'COD' ? 'Cash on delivery' : 'Cash at the shop';
+  await page.getByRole('button', { name: option }).click();
+  await page.getByRole('button', { name: 'Place order' }).click();
+  await expect(page.getByRole('heading', {
+    name: payment === 'GCash' ? 'Pay with GCash' : 'Order placed!',
+  })).toBeVisible();
+  const orders = await api(page, '/api/v1/orders');
+  expect(orders.status).toBe(200);
+  return orders.body.orders[0];
+}
+
+async function submitProof(page, reference) {
+  await page.getByLabel('GCash reference number').fill(reference);
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'gcash-proof.png',
+    mimeType: 'image/png',
+    buffer: png,
+  });
+  await page.getByRole('button', { name: 'Submit payment proof' }).click();
+}
+
+async function selectOrder(page, order) {
+  await page.locator('.order-inbox-item').filter({ hasText: order.id }).click();
+}
+
+function inspect() {
+  return runFixture('inspect', fixture);
+}
+
+function orderRecord(snapshot, databaseId) {
+  return snapshot.orders.find((order) => Number(order.id) === Number(databaseId));
+}
+
+async function saveScreenshot(page, name) {
+  const path = resolve('test-results/playwright/screenshots', name);
+  await mkdir(dirname(path), { recursive: true });
+  await page.screenshot({ path, fullPage: true });
+}
+
+test('owner Orders and Reports render from live API data and period selection updates the URL', async ({ page }) => {
+  await signIn(page, fixture.users.owner);
+  await navigate(page, 'Orders');
+  for (const tab of ['Needs action', 'Preparing', 'Ready', 'Completed', 'Cancelled']) {
+    await expect(page.getByRole('tab', { name: new RegExp(tab) })).toBeVisible();
+  }
+  await navigate(page, 'Reports');
+  for (const title of ['Revenue', 'Daily revenue', 'Payment methods', 'Orders by status', 'Sales by category', 'Delivery vs pickup', 'Top products', 'Payment review']) {
+    await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
+  }
+  const reports = await api(page, `/api/v1/owner/reports?period=month&date=${fixture.reportDate}`);
+  expect(reports.status).toBe(200);
+  await page.getByRole('button', { name: 'Week' }).click();
+  await expect(page).toHaveURL(/period=week/);
+  await expect(page.locator('body')).not.toContainText(/NaN|undefined|Infinity/);
+});
+
+test('owner Orders, Inventory, Reports, and Settings fit desktop and tablet widths', async ({ page }) => {
+  const phase = process.env.AQUATICA_SCREENSHOT_PHASE || 'real-data';
+  await signIn(page, fixture.users.owner);
+  for (const width of [1440, 1024, 768]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const label of ['Orders', 'Inventory', 'Reports', 'Settings']) {
+      await navigate(page, label, width);
+      await expect(page.getByRole('heading', { name: label, exact: true })).toBeVisible();
+      const dimensions = await page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      }));
+      expect(dimensions.scrollWidth, `${label} at ${width}px must not overflow the page`).toBeLessThanOrEqual(dimensions.clientWidth);
+      await saveScreenshot(page, `${phase}-owner-${label.toLowerCase()}-${width}.png`);
+    }
+  }
+});
+
+test('owner Orders and Reports remain within the page at narrow responsive widths', async ({ page }) => {
+  test.setTimeout(90_000);
+  await signIn(page, fixture.users.owner);
+  for (const width of [960, 720, 683, 512]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const label of ['Orders', 'Reports']) {
+      await navigate(page, label, width);
+      const dimensions = await page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        cards: [...document.querySelectorAll('.reports-card, .reports-stat, .orders-inbox-list, .order-inbox-detail')]
+          .map((card) => ({ clientWidth: card.clientWidth, scrollWidth: card.scrollWidth })),
+      }));
+      expect(dimensions.scrollWidth, `${label} at ${width}px must not overflow the page`)
+        .toBeLessThanOrEqual(dimensions.clientWidth);
+      expect(dimensions.cards.every((card) => card.scrollWidth <= card.clientWidth + 2)).toBe(true);
+    }
+  }
+});
+
+test('customer Shop, Cart, Orders, and Account remain usable at 390px with real products', async ({ page }) => {
+  await signIn(page, fixture.users.customer);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const product = fixture.products.xss;
+  await navigate(page, 'Shop', 390);
+  await expect(page.getByText(product.name, { exact: true })).toBeVisible();
+  await expect(page.locator('img[onerror]')).toHaveCount(0);
+  await page.getByRole('button', { name: `Add ${fixture.products.main.name} to cart` }).click();
+  for (const label of ['Cart', 'My orders', 'My account']) {
+    await navigate(page, label, 390);
+    const dimensions = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(dimensions.scrollWidth, `${label} at 390px must not overflow`).toBeLessThanOrEqual(dimensions.clientWidth);
+  }
+  const order = await placeOrder(page, fixture.products.main);
+  await saveScreenshot(page, 'real-data-customer-gcash-390.png');
+  expect(order.paymentStatus).toBe('Unpaid');
+});
+
+test('GCash proof rejection, duplicate reference, re-upload, approval, and next-order selection use the live API', async ({ page, browser }) => {
+  test.setTimeout(90_000);
+  await signIn(page, fixture.users.customer);
+  const { context: ownerContext, page: ownerPage } = await newSignedInPage(browser, fixture.users.owner);
+  try {
+    const first = await placeOrder(page, fixture.products.main);
+    await submitProof(page, `E2E${fixture.tag}A1`);
+    await expect(page.getByRole('heading', { name: 'Payment received for review' })).toBeVisible();
+    await page.waitForTimeout(1100);
+    const second = await placeOrder(page, fixture.products.main);
+    await submitProof(page, `E2E${fixture.tag}B1`);
+    await expect(page.getByRole('heading', { name: 'Payment received for review' })).toBeVisible();
+
+    await ownerPage.reload();
+    await navigate(ownerPage, 'Orders');
+    await selectOrder(ownerPage, first);
+    await ownerPage.getByRole('button', { name: 'Check proof' }).click();
+    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Reject' }).click();
+    await ownerPage.getByLabel('Reason for rejection').fill('Reference is not readable.');
+    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Reject payment proof' }).click();
+
+    await page.reload();
+    await navigate(page, 'My orders');
+    await expect(page.getByText('Payment update needed: Reference is not readable.')).toBeVisible();
+    await page.getByRole('button', { name: 'Upload proof' }).first().click();
+    await submitProof(page, `E2E${fixture.tag}A1`);
+    await expect(page.locator('.inline-error')).toContainText('already been used');
+    await submitProof(page, `E2E${fixture.tag}A2`);
+    await expect(page.getByRole('heading', { name: 'Payment received for review' })).toBeVisible();
+
+    await ownerPage.reload();
+    await navigate(ownerPage, 'Orders');
+    await selectOrder(ownerPage, first);
+    await ownerPage.getByRole('button', { name: 'Check proof' }).click();
+    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Approve' }).click();
+    await expect(ownerPage.locator('.order-inbox-detail h2')).toHaveText(second.id);
+    const snapshot = inspect();
+    expect(orderRecord(snapshot, first.databaseId)).toMatchObject({
+      order_status: 'preparing',
+      payment_status: 'paid',
+      stock_deducted: 1,
+    });
+    expect(snapshot.movements.filter((movement) => Number(movement.order_id) === first.databaseId && movement.type === 'sale'))
+      .toHaveLength(1);
+    expect(snapshot.proofs.filter((proof) => Number(proof.order_id) === first.databaseId)).toHaveLength(2);
+  } finally {
+    await ownerContext.close();
+  }
+});
+
+test('COD delivery and pickup cash reach their paid completion actions through the live API', async ({ page, browser }) => {
+  test.setTimeout(90_000);
+  await signIn(page, fixture.users.customer);
+  const { context: ownerContext, page: ownerPage } = await newSignedInPage(browser, fixture.users.owner);
+  try {
+    const delivery = await placeOrder(page, fixture.products.main, { payment: 'COD' });
+    await ownerPage.reload();
+    await navigate(ownerPage, 'Orders');
+    await selectOrder(ownerPage, delivery);
+    await ownerPage.getByRole('button', { name: 'Confirm order' }).click();
+    await ownerPage.getByRole('tab', { name: /Preparing/ }).click();
+    await selectOrder(ownerPage, delivery);
+    await ownerPage.getByRole('button', { name: 'Mark as ready' }).click();
+    await ownerPage.getByRole('tab', { name: /Ready/ }).click();
+    await selectOrder(ownerPage, delivery);
+    await ownerPage.getByRole('button', { name: 'Delivered and paid' }).click();
+
+    const pickup = await placeOrder(page, fixture.products.main, { payment: 'cash', fulfillment: 'Pickup' });
+    await ownerPage.reload();
+    await navigate(ownerPage, 'Orders');
+    await selectOrder(ownerPage, pickup);
+    await ownerPage.getByRole('button', { name: 'Confirm order' }).click();
+    await ownerPage.getByRole('tab', { name: /Preparing/ }).click();
+    await selectOrder(ownerPage, pickup);
+    await ownerPage.getByRole('button', { name: 'Mark as ready' }).click();
+    await ownerPage.getByRole('tab', { name: /Ready/ }).click();
+    await selectOrder(ownerPage, pickup);
+    await ownerPage.getByRole('button', { name: 'Handed over and paid' }).click();
+
+    const snapshot = inspect();
+    for (const order of [delivery, pickup]) {
+      expect(orderRecord(snapshot, order.databaseId)).toMatchObject({
+        order_status: 'completed',
+        payment_status: 'paid',
+        stock_deducted: 1,
+      });
+      expect(snapshot.movements.filter((movement) => Number(movement.order_id) === order.databaseId && movement.type === 'sale'))
+        .toHaveLength(1);
+    }
+  } finally {
+    await ownerContext.close();
+  }
+});
+
+test('short stock blocks checkout and customer and owner cancellations preserve or return stock', async ({ page, browser }) => {
+  test.setTimeout(90_000);
+  await signIn(page, fixture.users.customer);
+  const short = fixture.products.short;
+  await navigate(page, 'Shop');
+  await page.getByRole('button', { name: `Add ${short.name} to cart` }).click();
+  runFixture('adjust-stock', fixture, short.id, -1);
+  await navigate(page, 'Cart');
+  await page.getByRole('button', { name: 'Continue to checkout' }).click();
+  await page.getByRole('button', { name: /^Delivery/ }).click();
+  await page.getByLabel('Delivery address').fill('42 Test Ocean Road');
+  await page.getByRole('button', { name: 'Cash on delivery' }).click();
+  await page.getByRole('button', { name: 'Place order' }).click();
+  await expect(page.locator('.toast')).toContainText(/stock/i);
+  expect(inspect().orders).toHaveLength(0);
+  const cart = await api(page, '/api/v1/cart');
+  for (const item of cart.body.items) {
+    const removed = await api(page, `/api/v1/cart/items/${item.productId}`, 'PATCH', { quantity: 0 });
+    expect(removed.status).toBe(200);
+  }
+
+  const { context: ownerContext, page: ownerPage } = await newSignedInPage(browser, fixture.users.owner);
+  try {
+    const customerCancelled = await placeOrder(page, fixture.products.main, { payment: 'COD' });
+    await navigate(page, 'My orders');
+    await page.getByRole('button', { name: 'View order' }).first().click();
+    await page.getByRole('button', { name: 'Cancel order' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel order' }).click();
+    expect(orderRecord(inspect(), customerCancelled.databaseId)).toMatchObject({
+      order_status: 'cancelled',
+      stock_deducted: 0,
+    });
+
+    const ownerCancelled = await placeOrder(page, fixture.products.main, { payment: 'COD' });
+    await ownerPage.reload();
+    await navigate(ownerPage, 'Orders');
+    await selectOrder(ownerPage, ownerCancelled);
+    await ownerPage.getByRole('button', { name: 'Confirm order' }).click();
+    await ownerPage.getByRole('tab', { name: /Preparing/ }).click();
+    await selectOrder(ownerPage, ownerCancelled);
+    await ownerPage.getByRole('button', { name: 'Cancel order' }).click();
+    await ownerPage.getByLabel('Cancellation reason').fill('Owner cancellation test.');
+    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Cancel order' }).click();
+
+    const snapshot = inspect();
+    expect(orderRecord(snapshot, ownerCancelled.databaseId)).toMatchObject({
+      order_status: 'cancelled',
+      stock_deducted: 0,
+    });
+    expect(snapshot.movements.filter((movement) => Number(movement.order_id) === ownerCancelled.databaseId).map((movement) => movement.type))
+      .toEqual(['sale', 'cancellation']);
+    expect(snapshot.stocks.main.stock).toBe(fixture.products.main.initialStock);
+    expect(snapshot.stocks.main.stock).toBeGreaterThanOrEqual(0);
+  } finally {
+    await ownerContext.close();
+  }
+});
+
+test('customer is blocked from owner APIs and XSS product names render as text', async ({ page, browser }) => {
+  await signIn(page, fixture.users.customer);
+  const order = await placeOrder(page, fixture.products.main, { payment: 'COD' });
+  const { context, page: secondCustomerPage } = await newSignedInPage(browser, fixture.users.secondCustomer);
+  try {
+    expect((await api(secondCustomerPage, '/api/v1/owner/orders')).status).toBe(403);
+    expect((await api(secondCustomerPage, `/api/v1/orders/${order.databaseId}`)).status).toBe(404);
+    await navigate(secondCustomerPage, 'Shop');
+    await expect(secondCustomerPage.getByText(fixture.products.xss.name, { exact: true })).toBeVisible();
+    await expect(secondCustomerPage.locator('img[onerror]')).toHaveCount(0);
+    await expect(secondCustomerPage.locator('.sidebar .nav-link').filter({ hasText: /^(Orders|Reports|Inventory)$/ })).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test('real customer screenshots cover Shop, Cart, Checkout, GCash, and My Orders at four widths', async ({ page }) => {
+  test.setTimeout(120_000);
+  const phase = process.env.AQUATICA_SCREENSHOT_PHASE || 'real-data';
+  await signIn(page, fixture.users.customer);
+  for (const width of [1440, 1024, 768, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await navigate(page, 'Shop', width);
+    await page.getByRole('button', { name: `Add ${fixture.products.main.name} to cart` }).click();
+    await saveScreenshot(page, `${phase}-customer-shop-${width}.png`);
+    await navigate(page, 'Cart', width);
+    await saveScreenshot(page, `${phase}-customer-cart-${width}.png`);
+    await navigate(page, 'My orders', width);
+    await saveScreenshot(page, `${phase}-customer-my-orders-${width}.png`);
+    await navigate(page, 'Cart', width);
+    await page.getByRole('button', { name: 'Continue to checkout' }).click();
+    await page.getByRole('button', { name: /^Delivery/ }).click();
+    await page.getByLabel('Delivery address').fill('42 Test Ocean Road');
+    await saveScreenshot(page, `${phase}-customer-checkout-${width}.png`);
+    await page.getByRole('button', { name: 'Place order' }).click();
+    await expect(page.getByRole('heading', { name: 'Pay with GCash' })).toBeVisible();
+    await saveScreenshot(page, `${phase}-customer-gcash-${width}.png`);
+  }
+  const snapshot = inspect();
+  expect(snapshot.orders).toHaveLength(4);
+  expect(snapshot.orders.every((order) => order.payment_status === 'unpaid' && order.order_status === 'pending')).toBe(true);
+});

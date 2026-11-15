@@ -9,6 +9,47 @@ final class CommerceController
         return auth_db();
     }
 
+    private function pagination(string $prefix = ''): array
+    {
+        $pageKey = $prefix === '' ? 'page' : $prefix . 'Page';
+        $sizeKey = $prefix === '' ? 'pageSize' : $prefix . 'PageSize';
+        $perPageKey = $prefix === '' ? 'per_page' : $prefix . 'PerPage';
+        $page = filter_var($_GET[$pageKey] ?? 1, FILTER_VALIDATE_INT);
+        $pageSize = filter_var($_GET[$perPageKey] ?? $_GET[$sizeKey] ?? 50, FILTER_VALIDATE_INT);
+        if ($page === false || $page < 1 || $pageSize === false || $pageSize < 1 || $pageSize > 100
+            || $page > intdiv(PHP_INT_MAX, $pageSize)) {
+            json_response(['message' => 'Page must be positive and per_page (or pageSize) must be between 1 and 100.'], 422);
+        }
+        return ['page' => $page, 'pageSize' => $pageSize, 'offset' => ($page - 1) * $pageSize];
+    }
+
+    private function paginatedQuery(string $sql, string $countSql, array $params = [], string $prefix = ''): array
+    {
+        $pagination = $this->pagination($prefix);
+        $count = $this->db()->prepare($countSql);
+        $count->execute($params);
+        $total = (int) $count->fetchColumn();
+
+        $statement = $this->db()->prepare($sql . ' LIMIT :page_size OFFSET :page_offset');
+        foreach ($params as $key => $value) {
+            $statement->bindValue(':' . $key, $value);
+        }
+        $statement->bindValue(':page_size', $pagination['pageSize'], PDO::PARAM_INT);
+        $statement->bindValue(':page_offset', $pagination['offset'], PDO::PARAM_INT);
+        $statement->execute();
+
+        return [
+            'rows' => $statement->fetchAll(),
+            'pagination' => [
+                'page' => $pagination['page'],
+                'pageSize' => $pagination['pageSize'],
+                'per_page' => $pagination['pageSize'],
+                'total' => $total,
+                'pages' => (int) ceil($total / $pagination['pageSize']),
+            ],
+        ];
+    }
+
     private function customer(): array
     {
         return require_auth_role('customer');
@@ -262,6 +303,97 @@ final class CommerceController
         $statement->execute(['user_id' => $userId, 'order_id' => $orderId, 'title' => $title, 'body' => $body]);
     }
 
+    private function notifyOwners(?int $orderId, string $title, string $body): void
+    {
+        $owners = $this->db()->query("SELECT id FROM users WHERE role = 'owner'")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($owners as $ownerId) {
+            $this->notify((int) $ownerId, $orderId, $title, $body);
+        }
+    }
+
+    private function notifyLowStock(int $productId, string $name, int $before, int $after, int $threshold): void
+    {
+        if ($before > $threshold && $after <= $threshold) {
+            $this->notifyOwners(
+                null,
+                'Low stock',
+                sprintf('%s (#%d) has reached the low-stock threshold (%d remaining).', $name, $productId, $after)
+            );
+        }
+    }
+
+    private function storeVerifiedImage(array $file, string $relativeDirectory, string $prefix): string
+    {
+        if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
+            || !isset($file['tmp_name']) || !is_string($file['tmp_name'])
+            || !is_file($file['tmp_name'])) {
+            json_response(['message' => 'Choose a valid JPG or PNG image.'], 422);
+        }
+        $size = filesize($file['tmp_name']);
+        if ($size === false || $size < 1 || $size > 2 * 1024 * 1024) {
+            json_response(['message' => 'Choose a JPG or PNG image no larger than 2 MB.'], 422);
+        }
+        if (!function_exists('imagecreatefromstring') || !function_exists('imagepng') || !function_exists('imagejpeg')) {
+            json_response(['message' => 'Image processing is not configured on this server.'], 503);
+        }
+
+        $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
+        $imageInfo = @getimagesize($file['tmp_name']);
+        $extension = ['image/jpeg' => 'jpg', 'image/png' => 'png'][$mime] ?? null;
+        if ($extension === null || !is_array($imageInfo) || ($imageInfo['mime'] ?? null) !== $mime
+            || (int) ($imageInfo[0] ?? 0) < 1 || (int) ($imageInfo[1] ?? 0) < 1
+            || (int) $imageInfo[0] > 10000 || (int) $imageInfo[1] > 10000
+            || (int) $imageInfo[0] * (int) $imageInfo[1] > 25000000) {
+            json_response(['message' => 'Only valid JPG and PNG images are accepted.'], 422);
+        }
+
+        $contents = file_get_contents($file['tmp_name']);
+        $validEnd = $extension === 'png'
+            ? str_ends_with((string) $contents, "\x00\x00\x00\x00IEND\xAE\x42\x60\x82")
+            : str_ends_with((string) $contents, "\xFF\xD9");
+        if (!is_string($contents) || !$validEnd || stripos($contents, '<?php') !== false
+            || stripos($contents, '<?=') !== false) {
+            json_response(['message' => 'The image is incomplete or contains unsupported data.'], 422);
+        }
+
+        $image = @imagecreatefromstring($contents);
+        if ($image === false) {
+            json_response(['message' => 'The image file could not be decoded.'], 422);
+        }
+
+        $directory = dirname(__DIR__, 2) . '/' . $relativeDirectory;
+        if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
+            imagedestroy($image);
+            throw new RuntimeException('Image storage could not be created.');
+        }
+        $temporaryPath = tempnam($directory, '.image-');
+        if ($temporaryPath === false) {
+            imagedestroy($image);
+            throw new RuntimeException('Image processing could not be started.');
+        }
+
+        if ($extension === 'png') {
+            imagesavealpha($image, true);
+            $encoded = imagepng($image, $temporaryPath, 6);
+        } else {
+            $encoded = imagejpeg($image, $temporaryPath, 88);
+        }
+        imagedestroy($image);
+        $encodedSize = $encoded ? filesize($temporaryPath) : false;
+        if (!$encoded || $encodedSize === false || $encodedSize < 1 || $encodedSize > 2 * 1024 * 1024) {
+            unlink($temporaryPath);
+            json_response(['message' => 'The processed image exceeds the 2 MB limit.'], 422);
+        }
+
+        $filename = $prefix . bin2hex(random_bytes(24)) . '.' . $extension;
+        $destination = $directory . '/' . $filename;
+        if (!rename($temporaryPath, $destination)) {
+            unlink($temporaryPath);
+            throw new RuntimeException('Image could not be stored.');
+        }
+        return $relativeDirectory . '/' . $filename;
+    }
+
     private function statusHistory(int $orderId, ?string $from, string $to, ?int $userId, ?string $note = null): void
     {
         $statement = $this->db()->prepare(
@@ -281,10 +413,10 @@ final class CommerceController
     {
         $query = trim((string) ($_GET['q'] ?? ''));
         $category = trim((string) ($_GET['category'] ?? ''));
-        $sql = $this->productSelect() . ' WHERE p.is_active = 1';
+        $where = ' WHERE p.is_active = 1';
         $params = [];
         if ($query !== '') {
-            $sql .= ' AND (p.name LIKE :name_query OR p.description LIKE :description_query OR p.short_description LIKE :short_query OR c.name LIKE :category_query)';
+            $where .= ' AND (p.name LIKE :name_query OR p.description LIKE :description_query OR p.short_description LIKE :short_query OR c.name LIKE :category_query)';
             $wildcard = '%' . $query . '%';
             $params['name_query'] = $wildcard;
             $params['description_query'] = $wildcard;
@@ -292,23 +424,30 @@ final class CommerceController
             $params['category_query'] = $wildcard;
         }
         if ($category !== '' && strtolower($category) !== 'all items') {
-            $sql .= ' AND (c.slug = :category_slug OR c.name = :category_name)';
+            $where .= ' AND (c.slug = :category_slug OR c.name = :category_name)';
             $params['category_slug'] = $category;
             $params['category_name'] = $category;
         }
-        $sql .= ' ORDER BY p.featured DESC, p.name';
-        $statement = $this->db()->prepare($sql);
-        $statement->execute($params);
-        json_response(['products' => array_map(fn(array $row): array => $this->productRow($row), $statement->fetchAll())]);
+        $result = $this->paginatedQuery(
+            $this->productSelect() . $where . ' ORDER BY p.featured DESC, p.name',
+            'SELECT COUNT(*) FROM products p LEFT JOIN categories c ON c.id = p.category_id' . $where,
+            $params
+        );
+        json_response([
+            'products' => array_map(fn(array $row): array => $this->productRow($row), $result['rows']),
+            'pagination' => $result['pagination'],
+        ]);
     }
 
     public function categories(): never
     {
-        $rows = $this->db()->query(
+        $result = $this->paginatedQuery(
             'SELECT DISTINCT c.id, c.name, c.slug FROM categories c
-             JOIN products p ON p.category_id = c.id WHERE p.is_active = 1 ORDER BY c.name'
-        )->fetchAll();
-        json_response(['categories' => $rows]);
+             JOIN products p ON p.category_id = c.id WHERE p.is_active = 1 ORDER BY c.name',
+            'SELECT COUNT(DISTINCT c.id) FROM categories c
+             JOIN products p ON p.category_id = c.id WHERE p.is_active = 1'
+        );
+        json_response(['categories' => $result['rows'], 'pagination' => $result['pagination']]);
     }
 
     public function publicSettings(): never
@@ -316,7 +455,11 @@ final class CommerceController
         $settings = $this->settings();
         json_response([
             'deliveryFee' => (float) ($settings['delivery_fee'] ?? 0),
-            'gcashReady' => !empty($settings['gcash_name']) && !empty($settings['gcash_number']) && !empty($settings['gcash_qr_path']),
+            'gcashReady' => ($settings['gcash_enabled'] ?? '1') === '1'
+                && !empty($settings['gcash_name']) && !empty($settings['gcash_number']) && !empty($settings['gcash_qr_path']),
+            'gcashEnabled' => ($settings['gcash_enabled'] ?? '1') === '1',
+            'codEnabled' => ($settings['cod_enabled'] ?? '1') === '1',
+            'cashPickupEnabled' => ($settings['cash_pickup_enabled'] ?? '1') === '1',
             'shopName' => $settings['shop_name'] ?? 'Aquatica Nasugbu',
             'shopAddress' => $settings['shop_address'] ?? 'Nasugbu, Batangas',
             'gcashName' => $settings['gcash_name'] ?? '',
@@ -328,19 +471,21 @@ final class CommerceController
     public function cart(): never
     {
         $user = $this->customer();
-        $statement = $this->db()->prepare(
+        $result = $this->paginatedQuery(
             'SELECT p.id, p.name, p.category, p.short_description, p.description, p.price, p.stock,
                     p.image_path, p.image_url, p.featured, p.is_active, p.slug,
                     COALESCE(c.name, p.category) AS category_name, ci.qty
              FROM products p LEFT JOIN categories c ON c.id = p.category_id
              JOIN cart_items ci ON ci.product_id = p.id
-             WHERE ci.user_id = :user_id AND p.is_active = 1 ORDER BY ci.id'
+             WHERE ci.user_id = :user_id AND p.is_active = 1 ORDER BY ci.id',
+            'SELECT COUNT(*) FROM cart_items ci JOIN products p ON p.id = ci.product_id
+             WHERE ci.user_id = :user_id AND p.is_active = 1',
+            ['user_id' => $user['id']]
         );
-        $statement->execute(['user_id' => $user['id']]);
         $items = array_map(function (array $row): array {
             return $this->productRow($row) + ['quantity' => (int) $row['qty']];
-        }, $statement->fetchAll());
-        json_response(['items' => $items]);
+        }, $result['rows']);
+        json_response(['items' => $items, 'pagination' => $result['pagination']]);
     }
 
     public function addCartItem(): never
@@ -412,12 +557,16 @@ final class CommerceController
     public function customerOrders(): never
     {
         $user = $this->customer();
-        $statement = $this->db()->prepare(
+        $result = $this->paginatedQuery(
             'SELECT o.*, u.name AS customer_name, u.email AS customer_email
-             FROM orders o JOIN users u ON u.id = o.user_id WHERE o.user_id = :id ORDER BY o.created_at DESC'
+             FROM orders o JOIN users u ON u.id = o.user_id WHERE o.user_id = :id ORDER BY o.created_at DESC',
+            'SELECT COUNT(*) FROM orders WHERE user_id = :id',
+            ['id' => $user['id']]
         );
-        $statement->execute(['id' => $user['id']]);
-        json_response(['orders' => $this->orderRows($statement->fetchAll())]);
+        json_response([
+            'orders' => $this->orderRows($result['rows']),
+            'pagination' => $result['pagination'],
+        ]);
     }
 
     public function createOrder(): never
@@ -433,6 +582,14 @@ final class CommerceController
             json_response(['message' => 'Choose a payment method available for the selected fulfillment method.'], 422);
         }
         $shopSettings = $this->settings();
+        $paymentEnabled = match ($payment) {
+            'gcash' => ($shopSettings['gcash_enabled'] ?? '1') === '1',
+            'cod' => ($shopSettings['cod_enabled'] ?? '1') === '1',
+            'cash_pickup' => ($shopSettings['cash_pickup_enabled'] ?? '1') === '1',
+        };
+        if (!$paymentEnabled) {
+            json_response(['message' => 'This payment method is currently unavailable. Choose another option.'], 409);
+        }
         if ($payment === 'gcash' && (empty($shopSettings['gcash_name']) || empty($shopSettings['gcash_number']) || empty($shopSettings['gcash_qr_path']))) {
             json_response(['message' => 'GCash payment is not available until the shop configures its recipient and QR code.'], 409);
         }
@@ -530,6 +687,7 @@ final class CommerceController
         $deleteCart->execute(['user_id' => $user['id']]);
         $this->statusHistory($orderId, null, 'pending', (int) $user['id'], 'Order placed');
         $this->notify((int) $user['id'], $orderId, 'Order placed', 'Your order ' . $orderNo . ' has been placed.');
+        $this->notifyOwners($orderId, 'New order', 'Order ' . $orderNo . ' needs action.');
         $this->audit((int) $user['id'], 'order.created', 'order', $orderId, ['order_no' => $orderNo]);
         $db->commit();
         $order = $this->orderById($orderId);
@@ -571,6 +729,7 @@ final class CommerceController
             )->execute(['id' => $id]);
         }
         $this->notify((int) $user['id'], $id, 'Order cancelled', 'Your order ' . $order['order_no'] . ' was cancelled.');
+        $this->notifyOwners($id, 'Order cancelled', 'Customer cancelled order ' . $order['order_no'] . '.');
         $this->audit((int) $user['id'], 'order.cancelled', 'order', $id, ['reason' => $reason]);
         $db->commit();
         json_response(['message' => 'Order cancelled.']);
@@ -599,25 +758,33 @@ final class CommerceController
     private function deductOrderStock(array $order, int $actor): void
     {
         $db = $this->db();
-        $lines = $db->prepare('SELECT product_id, name_snapshot, qty FROM order_items WHERE order_id = :id FOR UPDATE');
+        $lines = $db->prepare(        'SELECT product_id, name_snapshot, qty FROM order_items WHERE order_id = :id FOR UPDATE');
         $lines->execute(['id' => $order['id']]);
         $items = $lines->fetchAll();
+        $productsById = [];
         foreach ($items as $item) {
-            $product = $db->prepare('SELECT name, stock FROM products WHERE id = :id FOR UPDATE');
+            $product = $db->prepare('SELECT name, stock, low_stock_threshold FROM products WHERE id = :id FOR UPDATE');
             $product->execute(['id' => $item['product_id']]);
             $row = $product->fetch();
             if (!$row || (int) $row['stock'] < (int) $item['qty']) {
                 throw new DomainException('Not enough stock for ' . ($row['name'] ?? $item['name_snapshot']) . '.');
             }
+            $productsById[(int) $item['product_id']] = $row;
         }
         foreach ($items as $item) {
-            $before = $db->prepare('SELECT stock FROM products WHERE id = :id');
-            $before->execute(['id' => $item['product_id']]);
-            $stockBefore = (int) $before->fetchColumn();
+            $product = $productsById[(int) $item['product_id']];
+            $stockBefore = (int) $product['stock'];
             $after = $stockBefore - (int) $item['qty'];
             $db->prepare('UPDATE products SET stock = :stock WHERE id = :id')
                 ->execute(['stock' => $after, 'id' => $item['product_id']]);
             $this->insertMovement((int) $item['product_id'], (string) $item['name_snapshot'], -(int) $item['qty'], $stockBefore, $after, 'sale', 'Order ' . $order['order_no'], (int) $order['id'], $actor);
+            $this->notifyLowStock(
+                (int) $item['product_id'],
+                (string) $product['name'],
+                $stockBefore,
+                $after,
+                (int) $product['low_stock_threshold']
+            );
         }
         $db->prepare('UPDATE orders SET stock_deducted = 1 WHERE id = :id')->execute(['id' => $order['id']]);
     }
@@ -672,13 +839,8 @@ final class CommerceController
             json_response(['message' => 'Enter a valid GCash reference number (6–20 letters or numbers).'], 422);
         }
         $file = $_FILES['proof'] ?? null;
-        if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || (int) ($file['size'] ?? 0) > 2 * 1024 * 1024) {
+        if (!is_array($file)) {
             json_response(['message' => 'Choose a JPG or PNG screenshot no larger than 2 MB.'], 422);
-        }
-        $mime = (new finfo(FILEINFO_MIME_TYPE))->file((string) $file['tmp_name']);
-        $extension = ['image/jpeg' => 'jpg', 'image/png' => 'png'][$mime] ?? null;
-        if (!$extension) {
-            json_response(['message' => 'Only JPG and PNG screenshots are accepted.'], 422);
         }
         $db = $this->db();
         $db->beginTransaction();
@@ -694,18 +856,8 @@ final class CommerceController
             $db->rollBack();
             json_response(['message' => 'This GCash reference number has already been used.'], 409);
         }
-        $directory = dirname(__DIR__, 2) . '/private/uploads/payment-proofs';
-        if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
-            $db->rollBack();
-            throw new RuntimeException('Payment proof storage could not be created.');
-        }
-        $filename = bin2hex(random_bytes(24)) . '.' . $extension;
-        $destination = $directory . '/' . $filename;
-        if (!move_uploaded_file((string) $file['tmp_name'], $destination)) {
-            $db->rollBack();
-            throw new RuntimeException('Payment proof could not be stored.');
-        }
-        $relativePath = 'private/uploads/payment-proofs/' . $filename;
+        $relativePath = $this->storeVerifiedImage($file, 'private/uploads/payment-proofs', '');
+        $destination = dirname(__DIR__, 2) . '/' . $relativePath;
         try {
             $insert = $db->prepare(
                 "INSERT INTO payment_proofs (order_id, reference_no, image_path, amount, status)
@@ -719,6 +871,7 @@ final class CommerceController
                 "UPDATE orders SET payment_status_v2 = 'under_review', payment_status = 'Proof submitted' WHERE id = :id"
             )->execute(['id' => $id]);
             $this->notify((int) $user['id'], $id, 'Payment proof received', 'Your GCash proof is waiting for review.');
+            $this->notifyOwners($id, 'GCash proof submitted', 'A GCash proof for order ' . $order['order_no'] . ' needs review.');
             $this->audit((int) $user['id'], 'payment.proof_submitted', 'order', $id);
             $db->commit();
         } catch (Throwable $exception) {
@@ -822,15 +975,20 @@ final class CommerceController
             'cancelled' => 'cancelled',
             default => null,
         };
-        $sql = 'SELECT o.*, u.name AS customer_name, u.email AS customer_email
-                FROM orders o JOIN users u ON u.id = o.user_id';
+        $where = '';
+        $params = [];
         if ($status !== null) {
-            $sql .= ' WHERE o.order_status = :status';
+            $where = ' WHERE o.order_status = :status';
+            $params['status'] = $status;
         }
-        $sql .= " ORDER BY CASE WHEN o.order_status = 'pending' THEN 0 ELSE 1 END, o.created_at ASC";
-        $statement = $this->db()->prepare($sql);
-        $statement->execute($status === null ? [] : ['status' => $status]);
-        $orders = $this->orderRows($statement->fetchAll());
+        $result = $this->paginatedQuery(
+            'SELECT o.*, u.name AS customer_name, u.email AS customer_email
+             FROM orders o JOIN users u ON u.id = o.user_id' . $where
+                . " ORDER BY CASE WHEN o.order_status = 'pending' THEN 0 ELSE 1 END, o.created_at ASC",
+            'SELECT COUNT(*) FROM orders o' . $where,
+            $params
+        );
+        $orders = $this->orderRows($result['rows']);
         $counts = $this->db()->query(
             "SELECT order_status, COUNT(*) AS count FROM orders GROUP BY order_status"
         )->fetchAll();
@@ -838,7 +996,7 @@ final class CommerceController
         foreach ($counts as $row) {
             $tabCounts[$row['order_status']] = (int) $row['count'];
         }
-        json_response(['orders' => $orders, 'counts' => $tabCounts]);
+        json_response(['orders' => $orders, 'counts' => $tabCounts, 'pagination' => $result['pagination']]);
     }
 
     public function ownerOrder(int $id): never
@@ -874,7 +1032,7 @@ final class CommerceController
                 }
                 $proof = $db->prepare(
                     "SELECT id, reference_no FROM payment_proofs
-                     WHERE order_id = :id AND status = 'under_review' ORDER BY id DESC LIMIT 1 FOR UPDATE"
+                     WHERE order_id = :id AND status = 'under_review' ORDER BY id DESC LIMIT 1"
                 );
                 $proof->execute(['id' => $id]);
                 $proofRow = $proof->fetch();
@@ -900,7 +1058,7 @@ final class CommerceController
                 }
                 $proof = $db->prepare(
                     "SELECT id FROM payment_proofs WHERE order_id = :id AND status = 'under_review'
-                     ORDER BY id DESC LIMIT 1 FOR UPDATE"
+                     ORDER BY id DESC LIMIT 1"
                 );
                 $proof->execute(['id' => $id]);
                 $proofId = $proof->fetchColumn();
@@ -999,21 +1157,27 @@ final class CommerceController
         $this->owner();
         $query = trim((string) ($_GET['q'] ?? ''));
         $category = trim((string) ($_GET['category'] ?? ''));
-        $sql = $this->productSelect() . ' WHERE 1 = 1';
+        $where = ' WHERE 1 = 1';
         $params = [];
         if ($query !== '') {
-            $sql .= ' AND (p.name LIKE :name_query OR p.description LIKE :description_query OR p.short_description LIKE :short_query OR c.name LIKE :category_query)';
+            $where .= ' AND (p.name LIKE :name_query OR p.description LIKE :description_query OR p.short_description LIKE :short_query OR c.name LIKE :category_query)';
             $wildcard = '%' . $query . '%';
             $params = ['name_query' => $wildcard, 'description_query' => $wildcard, 'short_query' => $wildcard, 'category_query' => $wildcard];
         }
         if ($category !== '' && strtolower($category) !== 'all items') {
-            $sql .= ' AND (c.slug = :category_slug OR c.name = :category_name)';
+            $where .= ' AND (c.slug = :category_slug OR c.name = :category_name)';
             $params['category_slug'] = $category;
             $params['category_name'] = $category;
         }
-        $statement = $this->db()->prepare($sql . ' ORDER BY p.name');
-        $statement->execute($params);
-        json_response(['products' => array_map(fn(array $row): array => $this->productRow($row), $statement->fetchAll())]);
+        $result = $this->paginatedQuery(
+            $this->productSelect() . $where . ' ORDER BY p.name',
+            'SELECT COUNT(*) FROM products p LEFT JOIN categories c ON c.id = p.category_id' . $where,
+            $params
+        );
+        json_response([
+            'products' => array_map(fn(array $row): array => $this->productRow($row), $result['rows']),
+            'pagination' => $result['pagination'],
+        ]);
     }
 
     private function categoryId(string $name): int
@@ -1133,18 +1297,28 @@ final class CommerceController
     public function inventory(): never
     {
         $this->owner();
-        $products = $this->db()->query($this->productSelect() . ' ORDER BY p.name')->fetchAll();
-        $movements = $this->db()->query(
+        $products = $this->paginatedQuery(
+            $this->productSelect() . ' ORDER BY p.name',
+            'SELECT COUNT(*) FROM products p LEFT JOIN categories c ON c.id = p.category_id',
+            [],
+            'products'
+        );
+        $movements = $this->paginatedQuery(
             'SELECT sm.id, sm.product_name, sm.change_qty, sm.reason, sm.created_at, o.order_no
              FROM stock_movements sm LEFT JOIN orders o ON o.id = sm.order_id
-             ORDER BY sm.id DESC LIMIT 100'
-        )->fetchAll();
+             ORDER BY sm.id DESC',
+            'SELECT COUNT(*) FROM stock_movements',
+            [],
+            'movements'
+        );
         json_response([
-            'products' => array_map(fn(array $row): array => $this->productRow($row), $products),
+            'products' => array_map(fn(array $row): array => $this->productRow($row), $products['rows']),
+            'productsPagination' => $products['pagination'],
             'movements' => array_map(static fn(array $row): array => [
                 'id' => (int) $row['id'], 'product' => $row['product_name'], 'change' => (int) $row['change_qty'],
                 'reason' => $row['reason'], 'orderId' => $row['order_no'] ?? '', 'date' => $row['created_at'],
-            ], $movements),
+            ], $movements['rows']),
+            'movementsPagination' => $movements['pagination'],
         ]);
     }
 
@@ -1163,7 +1337,7 @@ final class CommerceController
         }
         $db = $this->db();
         $db->beginTransaction();
-        $find = $db->prepare('SELECT name, stock FROM products WHERE id = :id FOR UPDATE');
+        $find = $db->prepare('SELECT name, stock, low_stock_threshold FROM products WHERE id = :id FOR UPDATE');
         $find->execute(['id' => $id]);
         $product = $find->fetch();
         if (!$product) {
@@ -1177,6 +1351,13 @@ final class CommerceController
         }
         $db->prepare('UPDATE products SET stock = :stock WHERE id = :id')->execute(['stock' => $after, 'id' => $id]);
         $this->insertMovement($id, $product['name'], $amount, (int) $product['stock'], $after, $type, $reason . ($note !== '' ? ': ' . $note : ''), null, (int) $owner['id']);
+        $this->notifyLowStock(
+            $id,
+            (string) $product['name'],
+            (int) $product['stock'],
+            $after,
+            (int) $product['low_stock_threshold']
+        );
         $this->audit((int) $owner['id'], 'inventory.moved', 'product', $id, ['change' => $amount, 'reason' => $reason]);
         $db->commit();
         json_response(['message' => 'Stock updated.', 'stock' => $after]);
@@ -1186,22 +1367,25 @@ final class CommerceController
     {
         $this->owner();
         $query = trim((string) ($_GET['q'] ?? ''));
-        $sql = 'SELECT u.id, u.name, u.email, u.phone, u.created_at,
-                       COUNT(o.id) AS orders_count, COALESCE(SUM(CASE WHEN o.order_status <> "cancelled" THEN o.total ELSE 0 END), 0) AS spend
-                FROM users u LEFT JOIN orders o ON o.user_id = u.id
-                WHERE u.role = "customer"';
+        $where = ' WHERE u.role = "customer"';
         $params = [];
         if ($query !== '') {
-            $sql .= ' AND (u.name LIKE :name_query OR u.email LIKE :email_query OR u.phone LIKE :phone_query)';
+            $where .= ' AND (u.name LIKE :name_query OR u.email LIKE :email_query OR u.phone LIKE :phone_query)';
             $wildcard = '%' . $query . '%';
             $params['name_query'] = $wildcard;
             $params['email_query'] = $wildcard;
             $params['phone_query'] = $wildcard;
         }
-        $sql .= ' GROUP BY u.id ORDER BY u.created_at DESC';
-        $statement = $this->db()->prepare($sql);
-        $statement->execute($params);
-        json_response(['customers' => $statement->fetchAll()]);
+        $sql = 'SELECT u.id, u.name, u.email, u.phone, u.created_at,
+                       COUNT(o.id) AS orders_count, COALESCE(SUM(CASE WHEN o.order_status <> "cancelled" THEN o.total ELSE 0 END), 0) AS spend
+                FROM users u LEFT JOIN orders o ON o.user_id = u.id'
+            . $where . ' GROUP BY u.id ORDER BY u.created_at DESC';
+        $result = $this->paginatedQuery(
+            $sql,
+            'SELECT COUNT(*) FROM users u' . $where,
+            $params
+        );
+        json_response(['customers' => $result['rows'], 'pagination' => $result['pagination']]);
     }
 
     private function reportPeriod(): array
@@ -1758,7 +1942,11 @@ final class CommerceController
             'deliveryFee' => (float) ($settings['delivery_fee'] ?? 0),
             'gcashName' => $settings['gcash_name'] ?? '',
             'gcashNumber' => $settings['gcash_number'] ?? '',
-            'gcashReady' => !empty($settings['gcash_name']) && !empty($settings['gcash_number']) && !empty($settings['gcash_qr_path']),
+            'gcashEnabled' => ($settings['gcash_enabled'] ?? '1') === '1',
+            'codEnabled' => ($settings['cod_enabled'] ?? '1') === '1',
+            'cashPickupEnabled' => ($settings['cash_pickup_enabled'] ?? '1') === '1',
+            'gcashReady' => ($settings['gcash_enabled'] ?? '1') === '1'
+                && !empty($settings['gcash_name']) && !empty($settings['gcash_number']) && !empty($settings['gcash_qr_path']),
             'gcashQrUrl' => !empty($settings['gcash_qr_path']) ? '/api/v1/owner/settings/gcash-qr' : null,
             'autoCancelHours' => isset($settings['auto_cancel_hours']) ? (int) $settings['auto_cancel_hours'] : null,
         ]]);
@@ -1769,39 +1957,103 @@ final class CommerceController
         $owner = $this->owner();
         $data = $this->body();
         $fields = [
-            'shopName' => 'shop_name', 'shopPhone' => 'shop_phone',
-            'shopAddress' => 'shop_address', 'about' => 'shop_about',
-            'gcashName' => 'gcash_name', 'gcashNumber' => 'gcash_number',
+            'shopName' => ['shop_name', 120],
+            'shopPhone' => ['shop_phone', 40],
+            'shopAddress' => ['shop_address', 255],
+            'about' => ['shop_about', 1000],
+            'gcashName' => ['gcash_name', 120],
+            'gcashNumber' => ['gcash_number', 13],
         ];
+        $flagFields = [
+            'gcashEnabled' => 'gcash_enabled',
+            'codEnabled' => 'cod_enabled',
+            'cashPickupEnabled' => 'cash_pickup_enabled',
+        ];
+        $allowedFields = array_merge(
+            array_keys($fields),
+            array_keys($flagFields),
+            ['deliveryFee', 'autoCancelHours']
+        );
+        if (array_diff(array_keys($data), $allowedFields)) {
+            json_response(['message' => 'The settings request contains unsupported fields.'], 422);
+        }
+
+        $validated = [];
         foreach ($fields as $input => $key) {
             if (array_key_exists($input, $data)) {
-                $value = trim((string) $data[$input]);
-                if (strlen($value) > 1000) {
-                    json_response(['message' => 'A settings value is too long.'], 422);
+                [$settingKey, $maxLength] = $key;
+                if (!is_string($data[$input])) {
+                    json_response(['message' => 'Settings text fields must be strings.'], 422);
                 }
-                $this->putSetting($key, $value);
+                $value = trim($data[$input]);
+                if (strlen($value) > $maxLength || ($input === 'shopName' && $value === '')) {
+                    json_response(['message' => $input === 'shopName' ? 'Shop name is required.' : 'A settings value is too long.'], 422);
+                }
+                if ($input === 'shopPhone' && $value !== ''
+                    && !preg_match('/^\+?[0-9][0-9 ()-]{5,23}$/', $value)) {
+                    json_response(['message' => 'Enter a valid shop contact number.'], 422);
+                }
+                if ($input === 'gcashNumber' && $value !== ''
+                    && !preg_match('/^(?:09[0-9]{9}|\+639[0-9]{9})$/', $value)) {
+                    json_response(['message' => 'Enter a valid Philippine GCash mobile number.'], 422);
+                }
+                $validated[$settingKey] = $value;
             }
         }
         if (array_key_exists('deliveryFee', $data)) {
-            $fee = filter_var($data['deliveryFee'], FILTER_VALIDATE_FLOAT);
-            if ($fee === false || $fee < 0 || $fee > 100000) {
+            if (!is_string($data['deliveryFee']) && !is_int($data['deliveryFee']) && !is_float($data['deliveryFee'])) {
                 json_response(['message' => 'Delivery fee must be a non-negative amount.'], 422);
             }
-            $this->putSetting('delivery_fee', number_format((float) $fee, 2, '.', ''));
+            $feeValue = trim((string) $data['deliveryFee']);
+            if (!preg_match('/^[0-9]{1,6}(?:\.[0-9]{1,2})?$/', $feeValue)
+                || (float) $feeValue > 100000) {
+                json_response(['message' => 'Delivery fee must be a non-negative amount.'], 422);
+            }
+            $validated['delivery_fee'] = number_format((float) $feeValue, 2, '.', '');
         }
+        foreach ($flagFields as $input => $settingKey) {
+            if (array_key_exists($input, $data)) {
+                $value = $data[$input];
+                if (!is_bool($value) && !(is_int($value) && in_array($value, [0, 1], true))) {
+                    json_response(['message' => 'Payment options must be true or false.'], 422);
+                }
+                $validated[$settingKey] = $value ? '1' : '0';
+            }
+        }
+        $removeAutoCancelSetting = false;
         if (array_key_exists('autoCancelHours', $data)) {
             if ($data['autoCancelHours'] === null || $data['autoCancelHours'] === '') {
-                $this->db()->prepare('DELETE FROM settings WHERE setting_key = :key')
-                    ->execute(['key' => 'auto_cancel_hours']);
+                $removeAutoCancelSetting = true;
             } else {
                 $hours = filter_var($data['autoCancelHours'], FILTER_VALIDATE_INT);
                 if ($hours === false || $hours < 1 || $hours > 720) {
                     json_response(['message' => 'Auto-cancel hours must be between 1 and 720.'], 422);
                 }
-                $this->putSetting('auto_cancel_hours', (string) $hours);
+                $validated['auto_cancel_hours'] = (string) $hours;
             }
         }
-        $this->audit((int) $owner['id'], 'settings.updated', 'shop_settings', '1', array_keys($data));
+        if (!$data) {
+            json_response(['message' => 'Provide at least one setting to update.'], 422);
+        }
+
+        $db = $this->db();
+        $db->beginTransaction();
+        try {
+            foreach ($validated as $key => $value) {
+                $this->putSetting($key, $value);
+            }
+            if ($removeAutoCancelSetting) {
+                $db->prepare('DELETE FROM settings WHERE setting_key = :key')
+                    ->execute(['key' => 'auto_cancel_hours']);
+            }
+            $this->audit((int) $owner['id'], 'settings.updated', 'shop_settings', '1', array_keys($data));
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
+        }
         json_response(['message' => 'Shop settings saved.']);
     }
 
@@ -1810,32 +2062,33 @@ final class CommerceController
         $owner = $this->owner();
         require_csrf();
         $file = $_FILES['qr'] ?? null;
-        if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || (int) ($file['size'] ?? 0) > 2 * 1024 * 1024) {
+        if (!is_array($file)) {
             json_response(['message' => 'Choose a JPG or PNG QR image no larger than 2 MB.'], 422);
         }
-        $mime = (new finfo(FILEINFO_MIME_TYPE))->file((string) $file['tmp_name']);
-        $extension = ['image/jpeg' => 'jpg', 'image/png' => 'png'][$mime] ?? null;
-        if (!$extension) {
-            json_response(['message' => 'Only JPG and PNG QR images are accepted.'], 422);
-        }
-        $directory = dirname(__DIR__, 2) . '/private/uploads/shop';
-        if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
-            throw new RuntimeException('Shop image storage could not be created.');
-        }
-        $filename = 'gcash-' . bin2hex(random_bytes(20)) . '.' . $extension;
-        $destination = $directory . '/' . $filename;
-        if (!move_uploaded_file((string) $file['tmp_name'], $destination)) {
-            throw new RuntimeException('Shop QR image could not be stored.');
-        }
+        $relativePath = $this->storeVerifiedImage($file, 'private/uploads/shop', 'gcash-');
+        $destination = dirname(__DIR__, 2) . '/' . $relativePath;
         $oldPath = $this->setting('gcash_qr_path');
-        $this->putSetting('gcash_qr_path', 'private/uploads/shop/' . $filename);
+        $db = $this->db();
+        $db->beginTransaction();
+        try {
+            $this->putSetting('gcash_qr_path', $relativePath);
+            $this->audit((int) $owner['id'], 'settings.gcash_qr_updated', 'shop_settings', '1');
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            if (is_file($destination)) {
+                unlink($destination);
+            }
+            throw $exception;
+        }
         if ($oldPath !== '' && str_starts_with($oldPath, 'private/uploads/shop/')) {
             $oldFile = dirname(__DIR__, 2) . '/' . $oldPath;
-            if (is_file($oldFile)) {
+            if ($oldPath !== $relativePath && is_file($oldFile)) {
                 unlink($oldFile);
             }
         }
-        $this->audit((int) $owner['id'], 'settings.gcash_qr_updated', 'shop_settings', '1');
         json_response(['message' => 'GCash QR image saved.']);
     }
 
@@ -1861,12 +2114,13 @@ final class CommerceController
         if ($user === null) {
             json_response(['message' => 'Please log in to continue.'], 401);
         }
-        $statement = $this->db()->prepare(
+        $result = $this->paginatedQuery(
             'SELECT id, order_id, title, body, read_at, created_at
-             FROM notifications WHERE user_id = :id ORDER BY created_at DESC LIMIT 100'
+             FROM notifications WHERE user_id = :id ORDER BY created_at DESC',
+            'SELECT COUNT(*) FROM notifications WHERE user_id = :id',
+            ['id' => $user['id']]
         );
-        $statement->execute(['id' => $user['id']]);
-        json_response(['notifications' => $statement->fetchAll()]);
+        json_response(['notifications' => $result['rows'], 'pagination' => $result['pagination']]);
     }
 
     public function unreadNotificationCount(): never
@@ -1887,6 +2141,12 @@ final class CommerceController
             json_response(['message' => 'Please log in to continue.'], 401);
         }
         require_csrf();
+        $check = $this->db()->prepare('SELECT user_id FROM notifications WHERE id = :id');
+        $check->execute(['id' => $id]);
+        $ownerId = $check->fetchColumn();
+        if ($ownerId === false || (int) $ownerId !== (int) $user['id']) {
+            json_response(['message' => 'Notification not found.'], 404);
+        }
         $statement = $this->db()->prepare(
             'UPDATE notifications SET read_at = UTC_TIMESTAMP() WHERE id = :id AND user_id = :user_id'
         );

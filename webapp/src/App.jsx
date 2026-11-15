@@ -5,7 +5,7 @@ import { Button, Field, Modal } from './components/UI.jsx';
 import { money } from './lib/format.js';
 import { orderNeedsAction } from './data.js';
 import { authGet, authPost } from './lib/authApi.js';
-import { commerceGet, commerceRequest } from './lib/commerceApi.js';
+import { commerceGet, commerceGetAll, commerceRequest } from './lib/commerceApi.js';
 import { commercePath } from './lib/commerceApi.js';
 import AccountPage from './pages/AccountPage.jsx';
 import CartPage from './pages/CartPage.jsx';
@@ -123,7 +123,7 @@ export default function App() {
         if (query.trim()) params.set('q', query.trim());
         if (category !== 'All items') params.set('category', category);
         const catalogPath = role === 'owner' ? '/owner/products' : '/catalog/products';
-        const result = await commerceGet(`${catalogPath}?${params.toString()}`);
+        const result = await commerceGetAll(`${catalogPath}?${params.toString()}`, ['products']);
         setProducts(result.products);
       } catch (error) {
         setToast(error.message);
@@ -146,12 +146,12 @@ export default function App() {
   async function reloadWorkspace(currentRole = role) {
     if (currentRole === 'customer') {
       const [catalog, cartData, orderData, profileData, shopSettings, notificationData, notificationCount] = await Promise.all([
-        commerceGet('/catalog/products'),
-        commerceGet('/cart'),
-        commerceGet('/orders'),
+        commerceGetAll('/catalog/products', ['products']),
+        commerceGetAll('/cart', ['items']),
+        commerceGetAll('/orders', ['orders']),
         commerceGet('/account/profile'),
         commerceGet('/settings/public'),
-        commerceGet('/notifications'),
+        commerceGetAll('/notifications', ['notifications']),
         commerceGet('/notifications/unread-count'),
       ]);
       setProducts(catalog.products);
@@ -165,13 +165,16 @@ export default function App() {
     }
     if (currentRole === 'owner') {
       const [catalog, inventory, orderData, settingsData, customerData, reportData, notificationData, notificationCount] = await Promise.all([
-        commerceGet('/owner/products'),
-        commerceGet('/owner/inventory'),
-        commerceGet('/owner/orders'),
+        commerceGetAll('/owner/products', ['products']),
+        commerceGetAll('/owner/inventory', [
+          { key: 'products', pageKey: 'productsPage', sizeKey: 'productsPageSize', metaKey: 'productsPagination' },
+          { key: 'movements', pageKey: 'movementsPage', sizeKey: 'movementsPageSize', metaKey: 'movementsPagination' },
+        ]),
+        commerceGetAll('/owner/orders', ['orders']),
         commerceGet('/owner/settings'),
-        commerceGet('/owner/customers'),
+        commerceGetAll('/owner/customers', ['customers']),
         commerceGet('/owner/reports'),
-        commerceGet('/notifications'),
+        commerceGetAll('/notifications', ['notifications']),
         commerceGet('/notifications/unread-count'),
       ]);
       setProducts(catalog.products);
@@ -462,7 +465,7 @@ export default function App() {
     case 'customers': content = <CustomersPage customers={customers} query={query} setQuery={setQuery} onToast={notify} />; break;
     case 'reports': content = <ReportsPage products={products} report={report} onToast={notify} />; break;
     case 'account': content = <AccountPage customer={customer} setCustomer={setCustomer} onSave={async () => { try { await commerceRequest('/account/profile', 'PATCH', customer); await reloadWorkspace('customer'); notify('Profile saved.'); } catch (error) { notify(error.message); } }} onToast={notify} />; break;
-    case 'settings': content = <SettingsPage settings={settings} onSave={async (values, qrFile) => { try { await commerceRequest('/owner/settings', 'PUT', values); if (qrFile) { const form = new FormData(); form.append('qr', qrFile); await commerceRequest('/owner/settings/gcash-qr', 'POST', form); } await reloadWorkspace('owner'); notify('Settings saved.'); } catch (error) { notify(error.message); } }} onToast={notify} />; break;
+    case 'settings': content = <SettingsPage settings={settings} onSave={async (values, qrFile) => { try { await commerceRequest('/owner/settings', 'PATCH', values); if (qrFile) { const form = new FormData(); form.append('qr', qrFile); await commerceRequest('/owner/settings/gcash-qr', 'POST', form); } await reloadWorkspace('owner'); notify('Settings saved.'); } catch (error) { notify(error.message); } }} onToast={notify} />; break;
     case 'notifications': content = <NotificationsPage notifications={notifications} onRead={async (id) => { try { await commerceRequest(`/notifications/${id}/read`, 'PATCH'); await reloadWorkspace(role); } catch (error) { notify(error.message); } }} onReadAll={async () => { try { await commerceRequest('/notifications/read-all', 'POST'); await reloadWorkspace(role); } catch (error) { notify(error.message); } }} />; break;
     case 'order-placed': content = <Confirmation icon="check" title="Order placed!" text={`Thanks, ${customer.name.split(' ')[0] || 'there'}. Your order ${activeOrderId ? `#${activeOrderId}` : ''} is in. We’ll keep you posted as it moves along.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;
     case 'proof-submitted': content = <Confirmation icon="clock" title="Payment received for review" text={`We’ve got your GCash proof for order ${proofOrderId}. Our team will check it and update your order soon.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;

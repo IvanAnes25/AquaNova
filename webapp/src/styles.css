@@ -526,6 +526,9 @@ select.input { color-scheme: dark; }
 .settings-nav button:hover { color: var(--text); background: #2b3038; }
 .settings-nav .settings-nav-active { color: #dceaff; background: #2c3e58; }
 .settings-main { padding: 19px; }
+.settings-payment-options { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.settings-payment-options label { display: flex; min-height: 44px; align-items: center; gap: 8px; color: var(--text); }
+.settings-payment-options input { width: 18px; height: 18px; accent-color: var(--blue); }
 .settings-avatar { border-radius: 11px; }
 .settings-hours { margin-top: 19px; padding-top: 17px; border-top: 1px solid #363b45; }
 .settings-hours h3 { margin: 0 0 8px; font-size: var(--type-caption); }
@@ -883,6 +886,20 @@ textarea::placeholder { color: var(--placeholder); opacity: 1; }
 @media (max-width: 700px) {
   body { min-width: 360px; overflow-x: clip; }
   .content-area { padding: var(--space-5) var(--space-3) var(--space-6); }
+  .cart-layout, .checkout-layout, .detail-layout, .payment-page, .account-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cart-layout > *, .checkout-layout > *, .detail-layout > *,
+  .payment-page > *, .account-layout > * { min-width: 0; }
+  .cart-line {
+    display: grid;
+    grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+    gap: var(--space-2);
+  }
+  .cart-line > .product-photo, .cart-line > .product-fallback { grid-row: span 2; }
+  .cart-line-info { min-width: 0; }
+  .cart-line .quantity-control { grid-column: 2; justify-self: start; }
+  .cart-line-total { grid-column: 3; min-width: 0; }
   .app-footer { flex-wrap: wrap; gap: var(--space-2); font-size: var(--type-caption); }
   .section-title h1, .reports-header h1 { font-size: var(--type-heading); }
   .reports-stat { min-height: 7rem; }

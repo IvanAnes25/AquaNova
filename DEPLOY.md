@@ -2,7 +2,7 @@
 
 ## cPanel
 
-1. Use PHP 8.1+ with PDO MySQL, mbstring, OpenSSL, Argon2id, and Apache `mod_rewrite`/`mod_headers`.
+1. Use PHP 8.1+ with PDO MySQL, mbstring, OpenSSL, Argon2id, fileinfo, GD, and Apache `mod_rewrite`/`mod_headers`. GD is required for validating and re-encoding payment proofs and shop QR uploads.
 2. Upload the repository root as the document root. Keep `private/` outside the public directory if the host supports it; otherwise retain its deny rule and verify direct requests are forbidden.
 3. Configure MySQL, import `database/auth_schema.sql`, then run `php scripts/migrate.php up` from the project root. Create `private/auth.php` from `private/auth.example.php`; use production database, SMTP, app key, HTTPS URL, and `environment => production`.
 4. Install Composer dependencies and run `npm ci` followed by `npm run build`. Vite outputs to `public/`; Apache rewrites are required for PHP endpoints and application routes.
@@ -12,7 +12,7 @@
 
 ## Short VPS outline
 
-Install Apache or Nginx with PHP-FPM 8.1+, MySQL/MariaDB, Composer, and Node.js. Point the virtual host at the project root, translate `.htaccess` protections and rewrites to the server config if using Nginx, keep `private/` and uploads outside the document root, configure TLS and PHP limits, then follow cPanel steps 3–7.
+Install Apache or Nginx with PHP-FPM 8.1+, PDO MySQL, mbstring, OpenSSL, Argon2id, fileinfo, GD, MySQL/MariaDB, Composer, and Node.js. Point the virtual host at the project root, translate `.htaccess` protections and rewrites to the server config if using Nginx, keep `private/` and uploads outside the document root, configure TLS and PHP limits, then follow cPanel steps 3–7. The PHP API must run on PHP-capable hosting; Vercel is static-only for this project and must not serve the API.
 
 ## Go-live checklist
 

@@ -1,18 +1,20 @@
 # Aquatica Web App
 
-This folder contains the Aquatica customer shop and owner workspace. Sign in and registration stay on the main website (`/login` and `/register`); after login, the website sends both account roles here. The app restores the existing PHP session and asks the customer- or owner-protected endpoint which workspace to show. It has no separate login, registration, or role selector.
+This folder contains the signed-in customer shop and owner workspace. Authentication and registration remain on the main website; the app restores the PHP session, verifies the server-side role, and requests commerce data from `/api/v1`. There is no separate login, registration, or role selector here.
 
-The shop, orders, and inventory shown here are still frontend demo data stored in browser local storage. Owner screens request the existing protected owner endpoint before navigation and demo actions, but demo data changes are not persisted or authorized by server-side business endpoints. Do not treat this frontend demo as production protection for owner data or actions.
+The workspace reads and updates its catalog, cart, orders, stock, customers, notifications, settings, and reports through the PHP/MySQL API. Collection endpoints use 1-based pagination; the app fetches all pages needed by its current client-side views. See the repository [API reference](../API.md) for the pagination contract.
 
-For development, run the website and webapp in separate terminals from the repository root:
+## Development
+
+From the repository root, run the website and webapp Vite servers in separate terminals:
 
 ```powershell
 npm run dev
 npm --prefix webapp run dev
 ```
 
-The website's Vite server proxies API calls to the local Apache project. `/webapp/` is served from the latest production build in `public/webapp/`, so run `npm run build` to refresh it while developing the integrated login flow. The webapp's separate Vite server is available when working on the workspace by itself. A production build places the bundle in `public/webapp/`; Apache serves it through the project's rewrite rules.
+The webapp Vite proxy forwards API requests to the local Apache project. For the integrated production build, run `npm run build`; output is written to `public/webapp/`. Apache serves the app and PHP API on the same origin so the session cookie and CSRF protections remain in effect.
 
-Page views are in `src/pages/`, reusable interface pieces are in `src/components/`, and app-wide demo state and role-aware navigation are in `src/App.jsx`.
+## Hosting
 
-The existing developer-only `database/create_owner.php` creates one owner account with an Argon2id password hash, and the auth API applies the same failed-login lockout to all accounts. The current backend does not yet force an owner to change a temporary password on first login; that requires a server-side account flag and password-change flow before using temporary credentials in a live system.
+The Vercel configuration builds static files only and does not host this PHP API. Deploy the app, PHP API, and MySQL-backed routes on a PHP-capable HTTPS host with the required rewrite rules and protected private storage. Follow the repository [deployment guide](../DEPLOY.md).

@@ -44,6 +44,32 @@ $runJob = static function () use ($assert): array {
     $assert($exitCode === 0, 'Auto-cancel command exits successfully: ' . trim((string) $errors));
     return ['output' => (string) $output, 'errors' => (string) $errors];
 };
+$runJobsConcurrently = static function () use ($assert): array {
+    $script = dirname(__DIR__) . '/scripts/cancel_expired_orders.php';
+    $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script);
+    $jobs = [];
+    for ($index = 0; $index < 2; $index++) {
+        $pipes = [];
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, dirname(__DIR__));
+        if (!is_resource($process)) {
+            throw new RuntimeException('Could not start concurrent auto-cancel command.');
+        }
+        fclose($pipes[0]);
+        $jobs[] = ['process' => $process, 'pipes' => $pipes];
+    }
+
+    $results = [];
+    foreach ($jobs as $job) {
+        $output = stream_get_contents($job['pipes'][1]);
+        $errors = stream_get_contents($job['pipes'][2]);
+        fclose($job['pipes'][1]);
+        fclose($job['pipes'][2]);
+        $exitCode = proc_close($job['process']);
+        $assert($exitCode === 0, 'Concurrent auto-cancel command exits successfully: ' . trim((string) $errors));
+        $results[] = ['output' => (string) $output, 'errors' => (string) $errors];
+    }
+    return $results;
+};
 
 try {
     $insertUser = $pdo->prepare(
@@ -183,6 +209,29 @@ try {
 
     $secondRun = $runJob();
     $assert(str_contains($secondRun['output'], 'Cancelled 0'), 'Repeated job runs do not cancel the same order twice.');
+
+    $reminderOrder = $createOrder('reminder', 'unpaid', true, null, false);
+    $pdo->prepare(
+        'UPDATE orders SET created_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 21 HOUR) WHERE id = :id'
+    )->execute(['id' => $reminderOrder]);
+    $pdo->prepare(
+        'INSERT INTO settings (setting_key, setting_value) VALUES (:key, :value)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)'
+    )->execute(['key' => 'auto_cancel_hours', 'value' => '24']);
+    $reminderRuns = $runJobsConcurrently();
+    $reminderOutput = implode("\n", array_column($reminderRuns, 'output'));
+    $assert(
+        substr_count($reminderOutput, 'Sent 1 payment reminder(s).') === 1
+            && substr_count($reminderOutput, 'Sent 0 payment reminder(s).') === 1,
+        'Concurrent auto-cancel runs send exactly one reminder for an order 20-24 hours old.'
+    );
+    $reminderCount = $pdo->prepare(
+        "SELECT COUNT(*) FROM notifications WHERE order_id = :id AND title = 'Payment reminder'"
+    );
+    $reminderCount->execute(['id' => $reminderOrder]);
+    $assert((int) $reminderCount->fetchColumn() === 1, 'A payment reminder is recorded once per order.');
+    $reminderRepeat = $runJob();
+    $assert(str_contains($reminderRepeat['output'], 'Sent 0 payment reminder(s).'), 'Repeated job runs do not repeat a sent reminder.');
 
     fwrite(STDOUT, "Commerce auto-cancel tests passed ($assertions assertions).\n");
 } catch (Throwable $exception) {

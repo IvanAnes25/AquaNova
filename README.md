@@ -41,6 +41,8 @@ The root contains the app entry point and the Vite, npm, Composer, and Apache co
 
 The Vercel configuration builds a static frontend only. PHP authentication, commerce endpoints, MySQL, and SMTP require a PHP-capable host or a separately deployed API with correctly configured same-origin sessions and routing.
 
+Commerce collection endpoints are paginated. Use `page` and `per_page` (1–100, default 50); `pageSize` remains an alias. Inventory uses independent `productsPage`/`productsPerPage` and `movementsPage`/`movementsPerPage` parameters, with the original `*PageSize` aliases supported. See [API.md](API.md) for response metadata and examples.
+
 ## Commerce database (development)
 
 The existing authentication and commerce tables are retained. The additive commerce migration adds the order workflow, categories, addresses, carts, payment proofs, notifications, audit history, and canonical catalog fields without deleting legacy columns or rows. New canonical order methods/statuses use `payment_method_v2` and `payment_status_v2` alongside the legacy enum fields until the API transition is complete.
@@ -100,16 +102,18 @@ All commerce routes use `/api/v1`. Responses are JSON unless a route explicitly 
 | `GET` | `/api/v1/owner/customers` | List and search customers |
 | `GET` | `/api/v1/owner/reports` | Read report summaries and sales data |
 | `GET` | `/api/v1/owner/reports.csv` | Download the orders CSV |
-| `GET`, `PUT` | `/api/v1/owner/settings` | Read or update shop, delivery-fee, GCash, and auto-cancel details |
+| `GET`, `PATCH`, `PUT` | `/api/v1/owner/settings` | Read or update shop, delivery-fee, payment-option, GCash, and auto-cancel details |
 | `GET`, `POST` | `/api/v1/owner/settings/gcash-qr` | View or upload the shop QR (JPG/PNG, maximum 2 MB) |
 
 GCash checkout is rejected by the server until the recipient name, number, and QR image are configured. Payment references are unique. Stock is deducted when a GCash proof is approved or a cash order is confirmed; each stock change is recorded in `stock_movements`.
 
-The owner may configure an auto-cancel duration from 1 to 720 hours in Settings; leaving the field blank disables the job. The scheduled CLI command cancels only Pending orders with Unpaid payment older than the order's creation time threshold, or Rejected payment older than its latest rejection time threshold. Proofs Under review are never auto-cancelled. Schedule `php scripts\cancel_expired_orders.php` to run periodically (for example, every 15 minutes); it records order history and audit entries and notifies the customer.
+The owner may configure an auto-cancel duration from 1 to 720 hours in Settings; leaving the field blank disables the job. The scheduled CLI command sends one payment reminder four hours before expiry when the configured duration exceeds four hours, then cancels only Pending orders with Unpaid payment older than the order's creation time threshold or Rejected payment older than its latest rejection time threshold. Proofs Under review are never auto-cancelled. Schedule `php scripts\cancel_expired_orders.php` to run periodically (for example, every 15 minutes); it records order history and audit entries and notifies the customer.
 
 ## Hostinger deployment
 
-Use a PHP-capable Hostinger plan and make the project root (the folder containing `index.php` and `api/`) the web document root so the PHP endpoints can run. Install Composer dependencies and build the frontend on deployment. Import `database/auth_schema.sql`, create a production `private/auth.php` with Hostinger's MySQL/SMTP settings, set `environment` to `production` and `app_url` to the HTTPS site address, and ensure the host supports Argon2id and Apache rewrite/header rules. Set `trust_proxy_https` to `true` only if the hosting proxy replaces the `X-Forwarded-Proto` header. Verify all pages and auth endpoints use HTTPS before accepting accounts.
+Use a PHP-capable Hostinger plan; do not deploy the PHP API to Vercel. Keep the React/Vite build and PHP API on the same HTTPS origin so the existing session cookies, CSRF checks, relative `/api/...` routes, and Apache rewrites continue to work. Point the domain's document root at the project entry point (the folder containing `index.php` and `api/`), or reproduce its rewrites and access denials if the host requires a separate public directory. Keep `private/auth.php` and uploaded proofs outside the public directory where the host permits it; otherwise retain and verify deny rules.
+
+On the PHP host, enable PHP 8.1+ with PDO MySQL, mbstring, OpenSSL, Argon2id, fileinfo, GD, and upload support; GD is required to decode and re-encode uploaded payment proofs and shop QR images. Provision MySQL and SMTP; install Composer dependencies; run `npm ci` and `npm run build`; import the auth schema and run the additive migrations; set production-only secrets in `private/auth.php`; enable HTTPS; and run the owner-creation CLI command. Configure the scheduled cancellation command and verified backups. Do not copy the local `private/auth.php`, local database, or test data to production. Set `trust_proxy_https` to `true` only when the trusted proxy replaces `X-Forwarded-Proto`. Finish the production-equivalent checklist in [TEST_REPORT.md](TEST_REPORT.md) before opening registration.
 
 ## First owner account
 

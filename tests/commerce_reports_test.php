@@ -12,6 +12,10 @@ if (PHP_SAPI !== 'cli' || !database_is_local()) {
 require_once dirname(__DIR__) . '/api/bootstrap.php';
 require_once dirname(__DIR__) . '/api/v1/CommerceController.php';
 
+if (getenv('DB_NAME') !== false) {
+    $authConfig['database']['name'] = getenv('DB_NAME');
+}
+
 $assertions = 0;
 $assert = static function (bool $condition, string $message) use (&$assertions): void {
     $assertions++;

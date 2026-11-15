@@ -12,6 +12,31 @@ if (!is_file($configFile)) {
 }
 
 $authConfig = require $configFile;
+$testDatabase = getenv('AQUATICA_TEST_DB_NAME');
+if ($testDatabase !== false && ($authConfig['environment'] ?? '') === 'local') {
+    if (!preg_match('/^aquanova_test_[a-z0-9_]+$/', $testDatabase)) {
+        json_response(['message' => 'The isolated API test database name is invalid.'], 503);
+    }
+    $authConfig['database']['name'] = $testDatabase;
+
+    $testMailHost = getenv('AQUATICA_TEST_MAIL_HOST');
+    $testMailPort = getenv('AQUATICA_TEST_MAIL_PORT');
+    if ($testMailHost !== false || $testMailPort !== false) {
+        $port = filter_var($testMailPort, FILTER_VALIDATE_INT);
+        if ($testMailHost !== '127.0.0.1' || $port === false || $port < 1 || $port > 65535) {
+            json_response(['message' => 'The test mail catcher must use loopback and a valid port.'], 503);
+        }
+        $authConfig['mail'] = [
+            'host' => $testMailHost,
+            'port' => $port,
+            'username' => 'aquatica-test',
+            'password' => 'aquatica-test',
+            'encryption' => '',
+            'from_email' => 'no-reply@example.test',
+            'from_name' => 'Aquatica test',
+        ];
+    }
+}
 date_default_timezone_set('UTC');
 ini_set('display_errors', '0');
 

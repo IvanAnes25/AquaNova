@@ -54,6 +54,61 @@ try {
     $candidates->execute(['unpaid_cutoff' => $cutoff, 'rejected_cutoff' => $cutoff]);
 
     $cancelled = 0;
+    $reminded = 0;
+    $notification = $pdo->prepare(
+        'INSERT INTO notifications (user_id, order_id, title, body)
+         VALUES (:user_id, :order_id, :title, :body)'
+    );
+    if ($hours > 4) {
+        $reminderCutoff = gmdate('Y-m-d H:i:s', time() - (($hours - 4) * 3600));
+        $reminderCandidates = $pdo->prepare(
+            "SELECT o.id, o.user_id, o.order_no, o.payment_status_v2
+             FROM orders o
+             LEFT JOIN payment_proofs latest_proof
+               ON latest_proof.id = (
+                   SELECT MAX(p.id) FROM payment_proofs p WHERE p.order_id = o.id
+               )
+             WHERE o.order_status = 'pending'
+               AND o.stock_deducted = 0
+               AND (
+                   (o.payment_status_v2 = 'unpaid'
+                    AND o.created_at <= :unpaid_reminder_cutoff
+                    AND o.created_at > :unpaid_cancel_cutoff)
+                   OR (
+                       o.payment_status_v2 = 'rejected'
+                       AND latest_proof.status = 'rejected'
+                       AND latest_proof.reviewed_at <= :rejected_reminder_cutoff
+                       AND latest_proof.reviewed_at > :rejected_cancel_cutoff
+                   )
+               )
+             ORDER BY o.id
+             FOR UPDATE"
+        );
+        $reminderCandidates->execute([
+            'unpaid_reminder_cutoff' => $reminderCutoff,
+            'unpaid_cancel_cutoff' => $cutoff,
+            'rejected_reminder_cutoff' => $reminderCutoff,
+            'rejected_cancel_cutoff' => $cutoff,
+        ]);
+        $existingReminder = $pdo->prepare(
+            "SELECT id FROM notifications WHERE order_id = :order_id AND title = 'Payment reminder' LIMIT 1"
+        );
+        foreach ($reminderCandidates->fetchAll() as $order) {
+            $existingReminder->execute(['order_id' => $order['id']]);
+            if ($existingReminder->fetchColumn()) {
+                continue;
+            }
+            $notification->execute([
+                'user_id' => $order['user_id'],
+                'order_id' => $order['id'],
+                'title' => 'Payment reminder',
+                'body' => 'Please complete payment for order ' . $order['order_no']
+                    . ' within the next four hours to avoid automatic cancellation.',
+            ]);
+            $reminded++;
+        }
+    }
+
     $update = $pdo->prepare(
         "UPDATE orders
          SET status = 'Cancelled', order_status = 'cancelled',
@@ -64,10 +119,6 @@ try {
     $history = $pdo->prepare(
         'INSERT INTO order_status_history (order_id, from_status, to_status, by_user_id, note)
          VALUES (:order_id, :from_status, :to_status, NULL, :note)'
-    );
-    $notification = $pdo->prepare(
-        'INSERT INTO notifications (user_id, order_id, title, body)
-         VALUES (:user_id, :order_id, :title, :body)'
     );
     $audit = $pdo->prepare(
         'INSERT INTO audit_log (user_id, action, entity, entity_id, details, ip)
@@ -114,6 +165,7 @@ try {
     }
 
     $pdo->commit();
+    fwrite(STDOUT, sprintf("Sent %d payment reminder(s).\n", $reminded));
     fwrite(STDOUT, sprintf("Cancelled %d expired Pending order(s); cutoff %s UTC.\n", $cancelled, $cutoff));
 } catch (Throwable $exception) {
     if ($pdo instanceof PDO && $pdo->inTransaction()) {

@@ -11,6 +11,36 @@ export function commerceGet(path) {
   return authGet(`${api}${path}`);
 }
 
+export async function commerceGetAll(path, collections) {
+  const definitions = collections.map((collection) => typeof collection === 'string'
+    ? { key: collection, pageKey: 'page', sizeKey: 'pageSize', metaKey: 'pagination' }
+    : {
+      key: collection.key,
+      pageKey: collection.pageKey || 'page',
+      sizeKey: collection.sizeKey || 'pageSize',
+      metaKey: collection.metaKey || 'pagination',
+    });
+  const baseUrl = new URL(path, window.location.origin);
+  for (const definition of definitions) {
+    baseUrl.searchParams.set(definition.pageKey, '1');
+    baseUrl.searchParams.set(definition.sizeKey, '100');
+  }
+  const initial = await commerceGet(`${baseUrl.pathname}${baseUrl.search}`);
+  const result = { ...initial };
+  for (const definition of definitions) {
+    const records = [...(initial[definition.key] || [])];
+    const pages = Number(initial[definition.metaKey]?.pages) || 1;
+    for (let page = 2; page <= pages; page += 1) {
+      const pageUrl = new URL(baseUrl);
+      pageUrl.searchParams.set(definition.pageKey, String(page));
+      const response = await commerceGet(`${pageUrl.pathname}${pageUrl.search}`);
+      records.push(...(response[definition.key] || []));
+    }
+    result[definition.key] = records;
+  }
+  return result;
+}
+
 export function commerceRequest(path, method, body = {}) {
   return authRequest(`${api}${path}`, method, body);
 }
