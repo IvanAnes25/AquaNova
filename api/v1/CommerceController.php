@@ -327,33 +327,40 @@ final class CommerceController
         if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
             || !isset($file['tmp_name']) || !is_string($file['tmp_name'])
             || !is_file($file['tmp_name'])) {
-            json_response(['message' => 'Choose a valid JPG or PNG image.'], 422);
+            json_response(['message' => 'Choose a valid raster image.'], 422);
         }
         $size = filesize($file['tmp_name']);
         if ($size === false || $size < 1 || $size > 2 * 1024 * 1024) {
-            json_response(['message' => 'Choose a JPG or PNG image no larger than 2 MB.'], 422);
+            json_response(['message' => 'Choose an image no larger than 2 MB.'], 422);
         }
-        if (!function_exists('imagecreatefromstring') || !function_exists('imagepng') || !function_exists('imagejpeg')) {
-            json_response(['message' => 'Image processing is not configured on this server.'], 503);
+        $mime = null;
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        if ($finfo !== false) {
+            $mime = finfo_file($finfo, $file['tmp_name']);
+            finfo_close($finfo);
         }
-
-        $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
         $imageInfo = @getimagesize($file['tmp_name']);
-        $extension = ['image/jpeg' => 'jpg', 'image/png' => 'png'][$mime] ?? null;
-        if ($extension === null || !is_array($imageInfo) || ($imageInfo['mime'] ?? null) !== $mime
+        $imageMime = is_array($imageInfo) ? ($imageInfo['mime'] ?? null) : null;
+        if (!is_string($imageMime) || !str_starts_with($imageMime, 'image/')
+            || ($mime !== null && $imageMime !== $mime)
             || (int) ($imageInfo[0] ?? 0) < 1 || (int) ($imageInfo[1] ?? 0) < 1
             || (int) $imageInfo[0] > 10000 || (int) $imageInfo[1] > 10000
             || (int) $imageInfo[0] * (int) $imageInfo[1] > 25000000) {
-            json_response(['message' => 'Only valid JPG and PNG images are accepted.'], 422);
+            json_response(['message' => 'Choose a valid raster image supported by this server.'], 422);
         }
-
         $contents = file_get_contents($file['tmp_name']);
-        $validEnd = $extension === 'png'
-            ? str_ends_with((string) $contents, "\x00\x00\x00\x00IEND\xAE\x42\x60\x82")
-            : str_ends_with((string) $contents, "\xFF\xD9");
+        $validEnd = match ($imageMime) {
+            'image/png' => str_ends_with((string) $contents, "\x00\x00\x00\x00IEND\xAE\x42\x60\x82"),
+            'image/jpeg' => str_ends_with((string) $contents, "\xFF\xD9"),
+            default => true,
+        };
         if (!is_string($contents) || !$validEnd || stripos($contents, '<?php') !== false
             || stripos($contents, '<?=') !== false) {
             json_response(['message' => 'The image is incomplete or contains unsupported data.'], 422);
+        }
+
+        if (!function_exists('imagecreatefromstring') || !function_exists('imagepng') || !function_exists('imagejpeg')) {
+            json_response(['message' => 'Image processing is not configured. Enable PHP GD and restart the web server.'], 503);
         }
 
         $image = @imagecreatefromstring($contents);
@@ -372,6 +379,7 @@ final class CommerceController
             throw new RuntimeException('Image processing could not be started.');
         }
 
+        $extension = $imageMime === 'image/jpeg' ? 'jpg' : 'png';
         if ($extension === 'png') {
             imagesavealpha($image, true);
             $encoded = imagepng($image, $temporaryPath, 6);
@@ -840,7 +848,7 @@ final class CommerceController
         }
         $file = $_FILES['proof'] ?? null;
         if (!is_array($file)) {
-            json_response(['message' => 'Choose a JPG or PNG screenshot no larger than 2 MB.'], 422);
+            json_response(['message' => 'Choose an image no larger than 2 MB.'], 422);
         }
         $db = $this->db();
         $db->beginTransaction();
@@ -2063,7 +2071,7 @@ final class CommerceController
         require_csrf();
         $file = $_FILES['qr'] ?? null;
         if (!is_array($file)) {
-            json_response(['message' => 'Choose a JPG or PNG QR image no larger than 2 MB.'], 422);
+            json_response(['message' => 'Choose an image no larger than 2 MB.'], 422);
         }
         $relativePath = $this->storeVerifiedImage($file, 'private/uploads/shop', 'gcash-');
         $destination = dirname(__DIR__, 2) . '/' . $relativePath;

@@ -658,7 +658,11 @@ try {
         'reference' => strtoupper(substr($tag, 0, 8)) . 'PHP1',
         'proof' => new CURLFile($validImageFile, 'image/png', 'image.png'),
     ]);
-    $assert($appendedPhp['status'] === 422, 'A valid image with appended PHP code must be rejected.');
+    $assert(
+        $appendedPhp['status'] === 422,
+        'A valid image with appended PHP code must be rejected; got '
+            . $appendedPhp['status'] . ': ' . $appendedPhp['body']
+    );
     file_put_contents($validImageFile, '');
     $image = imagecreatetruecolor(2, 2);
     if ($image === false || !imagepng($image, $validImageFile)) {
@@ -697,7 +701,7 @@ try {
         'reference' => strtoupper(substr($tag, 0, 8)) . 'GOOD',
         'proof' => new CURLFile($validImageFile, 'image/png', 'image.png'),
     ]);
-    $assert($validUpload['status'] === 201, 'A valid JPG/PNG image within the size limit must be accepted.');
+    $assert($validUpload['status'] === 201, 'A valid PNG image within the size limit must be accepted.');
     $ownerProofNotifications = $pdo->prepare(
         "SELECT COUNT(*) FROM notifications WHERE order_id = :order_id AND title = 'GCash proof submitted' AND user_id IN (:first, :second)"
     );
@@ -706,6 +710,29 @@ try {
     $pathStatement = $pdo->prepare('SELECT image_path FROM payment_proofs WHERE order_id = :id');
     $pathStatement->execute(['id' => $validUploadOrder]);
     $uploadedPaths[] = (string) $pathStatement->fetchColumn();
+    $gifUploadFile = tempnam(sys_get_temp_dir(), 'aquatica-valid-gif-');
+    $temporaryFiles[] = $gifUploadFile;
+    $gif = imagecreatetruecolor(2, 2);
+    if ($gif === false || !imagegif($gif, $gifUploadFile)) {
+        throw new RuntimeException('Could not generate the known-good GIF upload fixture.');
+    }
+    imagedestroy($gif);
+    $gifUploadOrder = $createOrder($userIds[0], $productId, 'GIF', 'gcash', 'unpaid');
+    $gifUpload = $customer->request('POST', '/api/v1/orders/' . $gifUploadOrder . '/payment-proof', [
+        'reference' => strtoupper(substr($tag, 0, 8)) . 'GIF1',
+        'proof' => new CURLFile($gifUploadFile, 'image/gif', 'image.gif'),
+    ]);
+    $assert($gifUpload['status'] === 201, 'A valid GIF image within the size limit must be accepted.');
+    $gifPathStatement = $pdo->prepare('SELECT image_path FROM payment_proofs WHERE order_id = :id');
+    $gifPathStatement->execute(['id' => $gifUploadOrder]);
+    $gifImagePath = (string) $gifPathStatement->fetchColumn();
+    $uploadedPaths[] = $gifImagePath;
+    $gifProofImage = $customer->request('GET', '/api/v1/orders/' . $gifUploadOrder . '/payment-proof/image');
+    $assert(
+        $gifProofImage['status'] === 200 && str_contains($gifProofImage['contentType'], 'image/png')
+            && str_ends_with($gifImagePath, '.png'),
+        'A supported non-PNG/JPG image must be normalized to a safe PNG for display.'
+    );
     $duplicateReferenceOrder = $createOrder($userIds[1], $productId, 'DUPREF', 'gcash', 'unpaid');
     $duplicateReference = $otherCustomer->request('POST', '/api/v1/orders/' . $duplicateReferenceOrder . '/payment-proof', [
         'reference' => strtoupper(substr($tag, 0, 8)) . 'GOOD',

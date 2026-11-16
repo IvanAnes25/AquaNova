@@ -333,8 +333,8 @@ export default function App() {
   };
   const chooseProof = (file) => {
     if (!file) return;
-    if (!['image/jpeg', 'image/png'].includes(file.type)) {
-      setProofError('Please choose a JPG or PNG image.');
+    if (file.size < 1) {
+      setProofError('This image is empty. Choose another file.');
       setProofFile(null);
     } else if (file.size > 2 * 1024 * 1024) {
       setProofError('This image is over 2 MB. Choose a smaller file.');

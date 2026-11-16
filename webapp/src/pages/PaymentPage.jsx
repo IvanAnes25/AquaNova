@@ -18,7 +18,7 @@ export default function PaymentPage({ order, settings, proofRef, setProofRef, pr
           : <section className="panel form-panel proof-form"><div className="panel-heading"><span className="step-number">03</span><div><h2>Share your payment</h2><p>Enter the reference number from your GCash receipt.</p></div></div>
             {order.paymentStatus === 'Rejected' && <div className="error-callout"><b>Payment proof needs an update</b><span>{order.proofReason}</span></div>}
             <Field label="GCash reference number"><input className="input" placeholder="e.g. 123456789012" value={proofRef} onChange={(event) => setProofRef(event.target.value)} /><span className="field-hint">Usually 10–13 digits. You can find it in your GCash receipt.</span></Field>
-            <Field label="Payment screenshot"><label className="upload-box"><input type="file" accept="image/jpeg,image/png" onChange={(event) => onFile(event.target.files?.[0])} /><span className="upload-icon"><Icon name="upload" size={20} /></span><b>{proofFile?.name || 'Choose a screenshot to upload'}</b><small>JPG or PNG · Max 2 MB</small></label></Field>
+            <Field label="Payment screenshot"><label className="upload-box"><input type="file" accept="image/*" onChange={(event) => onFile(event.target.files?.[0])} /><span className="upload-icon"><Icon name="upload" size={20} /></span><b>{proofFile?.name || 'Choose a screenshot to upload'}</b><small>Raster images · Max 2 MB</small></label></Field>
             {proofError && <p className="inline-error">{proofError}</p>}
             <Button className="button-full" onClick={() => onSubmit(order.id)}>Submit payment proof <Icon name="arrow" size={16} /></Button>
           </section>}

@@ -47,8 +47,8 @@ export default function SettingsPage({ settings, onSave }) {
               <label><input type="checkbox" checked={values.cashPickupEnabled !== false} onChange={(event) => update('cashPickupEnabled', event.target.checked)} /> Cash at the shop</label>
             </div>
           </Field>
-          <Field label="GCash QR image (JPG/PNG, max 2 MB)" className="field-full">
-            <input className="input" type="file" accept="image/jpeg,image/png" onChange={(event) => setQrFile(event.target.files?.[0] || null)} />
+          <Field label="GCash QR image (raster image, max 2 MB)" className="field-full">
+            <input className="input" type="file" accept="image/*" onChange={(event) => setQrFile(event.target.files?.[0] || null)} />
             {values.gcashQrUrl && <img className="settings-qr-preview" src={commercePath(values.gcashQrUrl)} alt="Configured shop GCash QR" />}
             <span className="field-hint">{values.gcashReady ? 'GCash checkout is enabled.' : 'GCash checkout remains unavailable until recipient name, number, and QR are configured.'}</span>
           </Field>
