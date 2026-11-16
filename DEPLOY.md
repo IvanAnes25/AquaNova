@@ -1,5 +1,28 @@
 # Aquatica deployment
 
+## Railway
+
+The root `Dockerfile` builds both Vite frontends and runs them with the PHP API in Apache. Railway's public domain forwards to the container's `PORT`; the container configures Apache to listen on that port and enables the rewrite rules in `.htaccess`.
+
+1. Create a Railway project from this repository and deploy the root directory. Railway will detect the `Dockerfile`.
+2. Add a Railway MySQL service (name it `MySQL`, or adjust the reference name below). In the AquaNova service's Variables, add service references:
+   - `DB_HOST` = `${{MySQL.MYSQLHOST}}`
+   - `DB_PORT` = `${{MySQL.MYSQLPORT}}`
+   - `DB_NAME` = `${{MySQL.MYSQLDATABASE}}`
+   - `DB_USER` = `${{MySQL.MYSQLUSER}}`
+   - `DB_PASSWORD` = `${{MySQL.MYSQLPASSWORD}}`
+3. Configure these AquaNova service variables. Keep secrets in Railway Variables, never in Git:
+   - `APP_ENV` = `production`
+   - `APP_URL` = `https://<your-Railway-public-domain>` (or leave unset to use `RAILWAY_PUBLIC_DOMAIN`)
+   - `APP_KEY` = a fresh random 64-character hexadecimal string (generate locally with `php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"`)
+   - `TRUST_PROXY_HTTPS` = `true`
+   - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_ENCRYPTION` (`tls` or `ssl`), `SMTP_FROM_EMAIL`, and `SMTP_FROM_NAME`
+4. Configure the database before enabling registration. Import `database/auth_schema.sql` and `database/mysql_legacy_schema.sql` into the Railway database, then run `php scripts/migrate.php up` from the Railway service shell. Create the initial owner with `php database/create_owner.php` from that shell; provide `AQUANOVA_OWNER_PASSWORD` securely for the command.
+5. Add a Railway Volume mounted at `/var/www/html/private/uploads` so payment proofs and the shop QR survive redeployments. Without persistent storage, uploaded images can be lost when the service is replaced.
+6. Generate the Railway public domain in the service's Networking settings. Check `/api/health.php` for PHP availability and `/api/v1/catalog/products` for a JSON response after configuring the database.
+
+The health endpoint only confirms that PHP is running; it does not confirm database, email, or migration readiness. Railway's filesystem is ephemeral except for attached volumes. Back up the database and uploaded files separately.
+
 ## cPanel
 
 1. Use PHP 8.1+ with PDO MySQL, mbstring, OpenSSL, Argon2id, fileinfo, GD, and Apache `mod_rewrite`/`mod_headers`. GD is required for validating and re-encoding payment proofs and shop QR uploads.
