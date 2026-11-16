@@ -2,7 +2,16 @@
 
 declare(strict_types=1);
 
-$authConfig = require dirname(__DIR__) . '/private/runtime_auth_config.php';
+$configFile = dirname(__DIR__) . '/private/auth.php';
+// Keep database and SMTP credentials out of the public frontend build.
+if (!is_file($configFile)) {
+    http_response_code(503);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['message' => 'Authentication is not configured yet.']);
+    exit;
+}
+
+$authConfig = require $configFile;
 $testDatabase = getenv('AQUATICA_TEST_DB_NAME');
 if ($testDatabase !== false && ($authConfig['environment'] ?? '') === 'local') {
     if (!preg_match('/^aquanova_test_[a-z0-9_]+$/', $testDatabase)) {
@@ -80,40 +89,11 @@ if (($argonOptions['memory_cost'] ?? 0) < 32768
 }
 
 if (!preg_match('/^[a-f0-9]{64,}$/', (string) ($authConfig['app_key'] ?? ''))) {
-    json_response(['message' => 'The application secret is missing or invalid. Set APP_KEY or configure private/auth.php.'], 503);
+    json_response(['message' => 'The application secret is missing or invalid. Generate a random secret and update private/auth.php.'], 503);
 }
 
 if (!str_starts_with((string) ($authConfig['dummy_password_hash'] ?? ''), '$argon2id$')) {
     json_response(['message' => 'The dummy password hash is missing or invalid. Restore it from private/auth.example.php.'], 503);
-}
-
-if (($authConfig['environment'] ?? '') === 'production') {
-    $appUrl = (string) ($authConfig['app_url'] ?? '');
-    $appUrlParts = parse_url($appUrl);
-    if ($appUrlParts === false || ($appUrlParts['scheme'] ?? '') !== 'https'
-        || ($appUrlParts['host'] ?? '') === '') {
-        json_response(['message' => 'Set APP_URL to the HTTPS URL of this deployment.'], 503);
-    }
-
-    if (empty($authConfig['trust_proxy_https'])) {
-        json_response(['message' => 'Set TRUST_PROXY_HTTPS=true when running behind Railway HTTPS networking.'], 503);
-    }
-
-    $database = $authConfig['database'] ?? [];
-    if (($database['host'] ?? '') === '' || ($database['name'] ?? '') === ''
-        || ($database['username'] ?? '') === '' || ($database['password'] ?? '') === ''
-        || (int) ($database['port'] ?? 0) < 1 || (int) $database['port'] > 65535) {
-        json_response(['message' => 'Production database settings are incomplete. Set DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD.'], 503);
-    }
-
-    $mail = $authConfig['mail'] ?? [];
-    if (($mail['host'] ?? '') === '' || ($mail['username'] ?? '') === ''
-        || ($mail['password'] ?? '') === '' || ($mail['from_email'] ?? '') === ''
-        || filter_var($mail['from_email'], FILTER_VALIDATE_EMAIL) === false
-        || (int) ($mail['port'] ?? 0) < 1 || (int) $mail['port'] > 65535
-        || !in_array($mail['encryption'] ?? '', ['tls', 'ssl'], true)) {
-        json_response(['message' => 'Production email settings are incomplete. Configure the SMTP_* variables.'], 503);
-    }
 }
 
 $secureCookie = is_https_request();

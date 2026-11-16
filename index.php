@@ -1,13 +1,16 @@
 <?php
-$authConfig = require __DIR__ . '/private/runtime_auth_config.php';
-$https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
-    || (int) ($_SERVER['SERVER_PORT'] ?? 0) === 443
-    || (!empty($authConfig['trust_proxy_https'])
-        && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-if (($authConfig['environment'] ?? 'local') === 'production' && !$https) {
-    $host = preg_replace('/[^a-zA-Z0-9.\-:]/', '', $_SERVER['HTTP_HOST'] ?? '');
-    header('Location: https://' . $host . ($_SERVER['REQUEST_URI'] ?? '/'), true, 308);
-    exit;
+$configFile = __DIR__ . '/private/auth.php';
+if (is_file($configFile)) {
+    $authConfig = require $configFile;
+    $https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+        || (int) ($_SERVER['SERVER_PORT'] ?? 0) === 443
+        || (!empty($authConfig['trust_proxy_https'])
+            && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    if (($authConfig['environment'] ?? 'local') === 'production' && !$https) {
+        $host = preg_replace('/[^a-zA-Z0-9.\-:]/', '', $_SERVER['HTTP_HOST'] ?? '');
+        header('Location: https://' . $host . ($_SERVER['REQUEST_URI'] ?? '/'), true, 308);
+        exit;
+    }
 }
 
 $https = !empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off';

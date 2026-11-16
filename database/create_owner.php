@@ -7,7 +7,13 @@ if (PHP_SAPI !== 'cli') {
     exit;
 }
 
-$config = require dirname(__DIR__) . '/private/runtime_auth_config.php';
+$configFile = dirname(__DIR__) . '/private/auth.php';
+if (!is_file($configFile)) {
+    fwrite(STDERR, "Create private/auth.php from private/auth.example.php first.\n");
+    exit(1);
+}
+
+$config = require $configFile;
 if (!defined('PASSWORD_ARGON2ID')) {
     fwrite(STDERR, "This PHP installation does not support Argon2id.\n");
     exit(1);

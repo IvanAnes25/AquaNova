@@ -26,7 +26,6 @@ The root contains the app entry point and the Vite, npm, Composer, and Apache co
 ## Documentation
 
 - [Deployment guide](DEPLOY.md)
-- Railway deployment is supported through the root `Dockerfile`; see the Railway section in [DEPLOY.md](DEPLOY.md) for required database, SMTP, and storage setup.
 - [API route reference](API.md)
 - [Owner guide](OWNER_GUIDE.md)
 - [Test report and known gaps](TEST_REPORT.md)
