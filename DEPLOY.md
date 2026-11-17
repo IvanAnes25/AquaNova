@@ -10,6 +10,10 @@
 6. Configure a scheduled task to run `php /home/ACCOUNT/path/to/AquaNova/scripts/cancel_expired_orders.php` every 15 minutes.
 7. Before launch, complete every unchecked item in `TEST_REPORT.md` and the go-live checklist.
 
+## phpMyAdmin-only hosting
+
+If the host does not provide a PHP CLI, first import `database/auth_schema.sql` and `database/mysql_legacy_schema.sql` into a fresh database. Back up the database, then import `database/infinityfree_migration.sql` once through phpMyAdmin. This SQL-only migration is for a fresh database whose legacy tables are empty; it does not backfill existing products or orders. For a database with data, run `php scripts/migrate.php up` through a PHP CLI instead.
+
 ## Short VPS outline
 
 Install Apache or Nginx with PHP-FPM 8.1+, PDO MySQL, mbstring, OpenSSL, Argon2id, fileinfo, GD, MySQL/MariaDB, Composer, and Node.js. Point the virtual host at the project root, translate `.htaccess` protections and rewrites to the server config if using Nginx, keep `private/` and uploads outside the document root, configure TLS and PHP limits, then follow cPanel steps 3–7. The PHP API must run on PHP-capable hosting; Vercel is static-only for this project and must not serve the API.
