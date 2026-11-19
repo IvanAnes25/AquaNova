@@ -18,8 +18,10 @@ Use **Products** to add catalog items and upload, replace, or remove a JPEG, PNG
 
 ## Settings and reports
 
-In **Settings**, update the delivery fee, GCash recipient name/number and QR, and enable or disable GCash, delivery COD, and pickup cash. Verify checkout only offers enabled methods. Use **Reports** to select Week, Month, or Year; review the period before exporting CSV or printing.
+In **Settings**, set each weekday's opening and closing times in Asia/Manila time, or mark that day closed. Closing must be later than opening. The manual Open/Closed switch takes precedence over the weekday schedule until you select **Follow weekday hours**. **Accept orders when closed** is on by default; when enabled, checkout accepts orders and displays a closed-shop notice, and customers are told the order will be processed when the shop opens. Turn it off to block checkout while retaining the cart. The public Home page and header show the server-computed status, and the visit section shows the configured hours.
+
+You can also update the delivery fee, GCash recipient name/number and QR, and enable or disable GCash, delivery COD, and pickup cash. Verify checkout only offers enabled methods. Use **Reports** to select Week, Month, or Year; review the period before exporting CSV or printing.
 
 ## Notifications and problems
 
-Open the bell or **Notifications** to review new orders, GCash proofs, order updates, low-stock alerts, and payment reminders. If an order, proof, stock figure, payment setting, or report looks wrong, stop processing it and contact the site administrator. Do not share passwords, reset links, private configuration, or customer data in public messages.
+Open the bell or **Notifications** to review important events: orders placed, payment proofs submitted, approvals/rejections, order confirmations and status changes, cancellations (including automatic cancellations), and low-stock alerts. Messages are grouped by order; unrelated messages appear under **Other**. You can mark one message or a whole group read, use **Mark all as read**, and delete read messages per group or with **Delete all read**. Unread messages cannot be deleted. Deletion is a soft delete, and the badge counts unread messages rather than groups. If an order, proof, stock figure, payment setting, or report looks wrong, stop processing it and contact the site administrator. Do not share passwords, reset links, private configuration, or customer data in public messages.

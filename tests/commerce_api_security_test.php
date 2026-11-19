@@ -332,7 +332,10 @@ try {
         'Concurrent duplicate product creates must replay or conflict and produce exactly one product.'
     );
     $setting = $pdo->prepare('SELECT setting_value FROM settings WHERE setting_key = :key');
-    foreach (['cod_enabled', 'delivery_fee', 'gcash_qr_path'] as $settingKey) {
+    foreach ([
+        'cod_enabled', 'cash_pickup_enabled', 'delivery_fee', 'gcash_qr_path', 'shop_hours',
+        'shop_open_override', 'shop_closed_message', 'accept_orders_when_closed',
+    ] as $settingKey) {
         $setting->execute(['key' => $settingKey]);
         $settingsBefore[$settingKey] = $setting->fetchColumn();
     }
@@ -362,6 +365,60 @@ try {
     $settingsAudit->execute(['user_id' => $userIds[2]]);
     $assert((int) $settingsAudit->fetchColumn() === 2, 'Owner settings updates must be audited.');
 
+    $pdo->prepare("DELETE FROM settings WHERE setting_key = 'accept_orders_when_closed'")->execute();
+    $defaultClosedOrdering = $publicSettings->request('GET', '/api/v1/settings/public', null, false);
+    $assert(
+        ($defaultClosedOrdering['json']['acceptOrdersWhenClosed'] ?? false) === true,
+        'Accept orders when closed defaults to enabled when no setting has been saved.'
+    );
+    $closedDayHours = [
+        'monday' => ['closed' => true, 'open' => null, 'close' => null],
+        'tuesday' => ['closed' => true, 'open' => null, 'close' => null],
+        'wednesday' => ['closed' => true, 'open' => null, 'close' => null],
+        'thursday' => ['closed' => true, 'open' => null, 'close' => null],
+        'friday' => ['closed' => true, 'open' => null, 'close' => null],
+        'saturday' => ['closed' => true, 'open' => null, 'close' => null],
+        'sunday' => ['closed' => true, 'open' => null, 'close' => null],
+    ];
+    $invalidHours = $closedDayHours;
+    $invalidHours['monday'] = ['closed' => false, 'open' => '09:00', 'close' => '09:00'];
+    $invalidHoursResponse = $ownerA->request('PATCH', '/api/v1/owner/settings', ['shopHours' => $invalidHours]);
+    $assert($invalidHoursResponse['status'] === 422, 'Closing time must be later than opening time.');
+    $manilaDay = strtolower((new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))->format('l'));
+    $manilaHours = $closedDayHours;
+    $manilaHours[$manilaDay] = ['closed' => false, 'open' => '00:00', 'close' => '23:59'];
+    $saveHours = $ownerA->request('PATCH', '/api/v1/owner/settings', [
+        'shopHours' => $manilaHours,
+        'shopOpenOverride' => 'scheduled',
+        'shopClosedMessage' => 'We will be back soon.',
+    ]);
+    $manilaStatus = $publicSettings->request('GET', '/api/v1/settings/public', null, false);
+    $assert(
+        $saveHours['status'] === 200
+            && ($manilaStatus['json']['shopStatus']['timezone'] ?? null) === 'Asia/Manila'
+            && ($manilaStatus['json']['shopStatus']['today'] ?? null) === $manilaDay
+            && ($manilaStatus['json']['shopStatus']['isOpen'] ?? false) === true,
+        'Scheduled shop status and weekday are computed using Asia/Manila.'
+    );
+    $manualClosed = $ownerA->request('PATCH', '/api/v1/owner/settings', ['shopOpenOverride' => 'closed']);
+    $manualClosedStatus = $publicSettings->request('GET', '/api/v1/settings/public', null, false);
+    $assert(
+        $manualClosed['status'] === 200 && ($manualClosedStatus['json']['shopStatus']['isOpen'] ?? true) === false,
+        'A manual Closed override takes precedence over open weekday hours.'
+    );
+    $manualOpen = $ownerA->request('PATCH', '/api/v1/owner/settings', ['shopOpenOverride' => 'open']);
+    $manualOpenStatus = $publicSettings->request('GET', '/api/v1/settings/public', null, false);
+    $assert(
+        $manualOpen['status'] === 200 && ($manualOpenStatus['json']['shopStatus']['isOpen'] ?? false) === true,
+        'A manual Open override takes precedence over closed weekday hours.'
+    );
+    $resumeSchedule = $ownerA->request('PATCH', '/api/v1/owner/settings', ['shopOpenOverride' => 'scheduled']);
+    $scheduleAgain = $publicSettings->request('GET', '/api/v1/settings/public', null, false);
+    $assert(
+        $resumeSchedule['status'] === 200 && ($scheduleAgain['json']['shopStatus']['isOpen'] ?? true) === true,
+        'Switching back to scheduled mode resumes the weekday hours.'
+    );
+
     $anonymous = new ApiTestClient($baseUrl, '', '', $cookieFiles);
     $anonymousResult = $anonymous->request('GET', '/api/v1/owner/orders', null, false);
     $assert($anonymousResult['status'] === 401, 'Logged-out owner list request must return 401.');
@@ -384,6 +441,49 @@ try {
     $assert($otherOrderResult['status'] === 404, 'Customer must not read another customer order.');
     $customerList = $customer->request('GET', '/api/v1/orders');
     $assert($customerList['status'] === 200 && count($customerList['json']['orders'] ?? []) === 0, 'Customer order list must exclude other customers.');
+
+    $checkoutProductId = (int) $pdo->query(
+        'SELECT id FROM products WHERE is_active = 1 AND stock > 0 ORDER BY id LIMIT 1'
+    )->fetchColumn();
+    if ($checkoutProductId < 1) {
+        throw new RuntimeException('An in-stock product is required for closed-shop checkout tests.');
+    }
+    $pdo->prepare(
+        'INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)'
+    )->execute(['user_id' => $userIds[0], 'product_id' => $checkoutProductId]);
+    $ownerA->request('PATCH', '/api/v1/owner/settings', [
+        'shopOpenOverride' => 'closed',
+        'cashPickupEnabled' => true,
+    ]);
+    $closedOrderResult = $customer->request('POST', '/api/v1/orders', [
+        'fulfillment' => 'pickup', 'paymentMethod' => 'cash_pickup', 'name' => 'Test', 'phone' => '5550000',
+    ]);
+    $assert(
+        $closedOrderResult['status'] === 201
+            && ($closedOrderResult['json']['order']['shopClosedAtOrder'] ?? false) === true
+            && str_contains((string) ($closedOrderResult['json']['order']['customerNotice'] ?? ''), 'We will be back soon.'),
+        'Closed-shop orders default to accepted and retain a customer-visible closed-hours notice.'
+    );
+    $closedOrderId = (int) ($closedOrderResult['json']['order']['databaseId'] ?? 0);
+    $ownerA->request('PATCH', '/api/v1/owner/settings', ['acceptOrdersWhenClosed' => false]);
+    $pdo->prepare(
+        'INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)'
+    )->execute(['user_id' => $userIds[0], 'product_id' => $checkoutProductId]);
+    $blockedClosedOrder = $customer->request('POST', '/api/v1/orders', [
+        'fulfillment' => 'pickup', 'paymentMethod' => 'cash_pickup', 'name' => 'Test', 'phone' => '5550000',
+    ]);
+    $cartAfterBlockedOrder = $customer->request('GET', '/api/v1/cart');
+    $assert(
+        $blockedClosedOrder['status'] === 409
+            && count($cartAfterBlockedOrder['json']['items'] ?? []) === 1,
+        'Disabling closed-shop orders blocks checkout without removing the cart.'
+    );
+    $pdo->prepare('DELETE FROM cart_items WHERE user_id = :user_id AND product_id = :product_id')
+        ->execute(['user_id' => $userIds[0], 'product_id' => $checkoutProductId]);
+    $ownerA->request('PATCH', '/api/v1/owner/settings', [
+        'shopOpenOverride' => 'scheduled',
+        'acceptOrdersWhenClosed' => true,
+    ]);
 
     $catalogFirst = $customer->request('GET', '/api/v1/catalog/products', ['page' => 1, 'pageSize' => 1]);
     $catalogSecond = $customer->request('GET', '/api/v1/catalog/products', ['page' => 2, 'pageSize' => 1]);
@@ -428,6 +528,118 @@ try {
         $markForeignNotification['status'] === 404 && $notificationReadAt->fetchColumn() === null,
         'Customers must not read or mark another customer\'s notification as read.'
     );
+
+    $unreadBaseline = $customer->request('GET', '/api/v1/notifications/unread-count');
+    $insertTestNotification = $pdo->prepare(
+        'INSERT INTO notifications (user_id, order_id, title, body, read_at)
+         VALUES (:user_id, :order_id, :title, :body, :read_at)'
+    );
+    $insertTestNotification->execute([
+        'user_id' => $userIds[0], 'order_id' => $closedOrderId,
+        'title' => 'Group unread one', 'body' => 'First order-group message.', 'read_at' => null,
+    ]);
+    $groupUnreadOneId = (int) $pdo->lastInsertId();
+    $insertTestNotification->execute([
+        'user_id' => $userIds[0], 'order_id' => $closedOrderId,
+        'title' => 'Group unread two', 'body' => 'Second order-group message.', 'read_at' => null,
+    ]);
+    $groupUnreadTwoId = (int) $pdo->lastInsertId();
+    $insertTestNotification->execute([
+        'user_id' => $userIds[0], 'order_id' => null,
+        'title' => 'Other unread', 'body' => 'Unattached order update.', 'read_at' => null,
+    ]);
+    $otherUnreadId = (int) $pdo->lastInsertId();
+    $insertTestNotification->execute([
+        'user_id' => $userIds[0], 'order_id' => null,
+        'title' => 'Other read', 'body' => 'Previously read update.', 'read_at' => gmdate('Y-m-d H:i:s'),
+    ]);
+    $otherReadId = (int) $pdo->lastInsertId();
+
+    $groupReadWithoutCsrf = $customer->request(
+        'PATCH',
+        '/api/v1/notifications/group/read',
+        ['orderId' => $closedOrderId],
+        false
+    );
+    $groupDeleteWithoutCsrf = $customer->request(
+        'DELETE',
+        '/api/v1/notifications/group/read',
+        ['orderId' => null],
+        false
+    );
+    $otherReadDeletedAt = $pdo->prepare('SELECT deleted_at FROM notifications WHERE id = :id');
+    $otherReadDeletedAt->execute(['id' => $otherReadId]);
+    $assert(
+        $groupReadWithoutCsrf['status'] === 403
+            && $groupDeleteWithoutCsrf['status'] === 403
+            && $otherReadDeletedAt->fetchColumn() === null,
+        'Group read and delete operations require CSRF protection.'
+    );
+
+    $unreadBefore = $customer->request('GET', '/api/v1/notifications/unread-count');
+    $assert(
+        (int) ($unreadBefore['json']['count'] ?? 0) === (int) ($unreadBaseline['json']['count'] ?? 0) + 3,
+        'Unread badge increments by each unread message, not by notification groups.'
+    );
+    $unreadDelete = $customer->request('DELETE', '/api/v1/notifications/' . $groupUnreadOneId);
+    $unreadStillPresent = $pdo->prepare('SELECT deleted_at FROM notifications WHERE id = :id');
+    $unreadStillPresent->execute(['id' => $groupUnreadOneId]);
+    $assert(
+        $unreadDelete['status'] === 409 && $unreadStillPresent->fetchColumn() === null,
+        'Unread notifications cannot be deleted.'
+    );
+    $singleRead = $customer->request('PATCH', '/api/v1/notifications/' . $otherUnreadId . '/read');
+    $singleReadAt = $pdo->prepare('SELECT read_at FROM notifications WHERE id = :id');
+    $singleReadAt->execute(['id' => $otherUnreadId]);
+    $afterSingleRead = $customer->request('GET', '/api/v1/notifications/unread-count');
+    $assert(
+        $singleRead['status'] === 200 && $singleReadAt->fetchColumn() !== null
+            && (int) ($afterSingleRead['json']['count'] ?? -1) === (int) ($unreadBefore['json']['count'] ?? 0) - 1,
+        'Marking one notification read reduces the unread-message badge by exactly one.'
+    );
+    $groupList = $customer->request('GET', '/api/v1/notifications', ['pageSize' => 100]);
+    $orderGroupMessage = array_values(array_filter(
+        $groupList['json']['notifications'] ?? [],
+        static fn(array $notification): bool => (int) ($notification['order_id'] ?? 0) === $closedOrderId
+    ));
+    $assert(
+        count($orderGroupMessage) >= 3
+            && $orderGroupMessage[0]['order_number'] === $closedOrderResult['json']['order']['id']
+            && $orderGroupMessage[0]['order_status'] === 'pending',
+        'Order notifications include the current order number and status for grouping.'
+    );
+    $groupRead = $customer->request('PATCH', '/api/v1/notifications/group/read', ['orderId' => $closedOrderId]);
+    $groupReadCount = $pdo->prepare(
+        'SELECT COUNT(*) FROM notifications
+         WHERE user_id = :user_id AND order_id = :order_id AND read_at IS NOT NULL AND deleted_at IS NULL'
+    );
+    $groupReadCount->execute(['user_id' => $userIds[0], 'order_id' => $closedOrderId]);
+    $assert($groupRead['status'] === 200 && (int) $groupReadCount->fetchColumn() >= 3, 'Opening a group marks its messages read.');
+    $groupDelete = $customer->request('DELETE', '/api/v1/notifications/group/read', ['orderId' => $closedOrderId]);
+    $groupDeletedCount = $pdo->prepare(
+        'SELECT COUNT(*) FROM notifications WHERE user_id = :user_id AND order_id = :order_id AND deleted_at IS NOT NULL'
+    );
+    $groupDeletedCount->execute(['user_id' => $userIds[0], 'order_id' => $closedOrderId]);
+    $assert($groupDelete['status'] === 200 && (int) $groupDeletedCount->fetchColumn() >= 3, 'Delete read on a group uses soft deletion.');
+    $singleDelete = $customer->request('DELETE', '/api/v1/notifications/' . $otherReadId);
+    $singleDeletedAt = $pdo->prepare('SELECT deleted_at FROM notifications WHERE id = :id');
+    $singleDeletedAt->execute(['id' => $otherReadId]);
+    $assert($singleDelete['status'] === 200 && $singleDeletedAt->fetchColumn() !== null, 'A read notification can be soft-deleted.');
+    $markAllRead = $customer->request('POST', '/api/v1/notifications/read-all');
+    $remainingUnread = $customer->request('GET', '/api/v1/notifications/unread-count');
+    $deleteAllRead = $customer->request('DELETE', '/api/v1/notifications/read');
+    $otherUnreadDeletedAt = $pdo->prepare('SELECT deleted_at FROM notifications WHERE id = :id');
+    $otherUnreadDeletedAt->execute(['id' => $otherUnreadId]);
+    $assert(
+        $markAllRead['status'] === 200 && ($remainingUnread['json']['count'] ?? -1) === 0
+            && $deleteAllRead['status'] === 200 && $otherUnreadDeletedAt->fetchColumn() !== null,
+        'Mark all as read and Delete all read operate on the signed-in user’s messages.'
+    );
+    $foreignDelete = $customer->request('DELETE', '/api/v1/notifications/' . $foreignNotificationId);
+    $assert($foreignDelete['status'] === 404, 'Users cannot delete another user’s notification.');
+    $deletedList = $customer->request('GET', '/api/v1/notifications', ['pageSize' => 100]);
+    $visibleIds = array_map('intval', array_column($deletedList['json']['notifications'] ?? [], 'id'));
+    $assert(!in_array($groupUnreadOneId, $visibleIds, true), 'Soft-deleted notifications are excluded from the visible list.');
 
     $sqlInjection = $customer->request('GET', '/api/v1/catalog/products', ['q' => "' OR 1=1 --", 'pageSize' => 100]);
     $assert($sqlInjection['status'] === 200 && count($sqlInjection['json']['products'] ?? []) === 0, 'SQL-looking search input must be treated as data.');
@@ -557,7 +769,18 @@ try {
 
     $alreadyApproved = $raceResults[0]['status'] === 200 ? $raceOne : $raceTwo;
     $approveTwice = $ownerA->request('POST', '/api/v1/owner/orders/' . $alreadyApproved . '/actions', ['action' => 'approve_proof']);
-    $assert($approveTwice['status'] === 409, 'Approving the same proof twice must be rejected.');
+    $approvedOrderOwner = $pdo->prepare('SELECT user_id FROM orders WHERE id = :id');
+    $approvedOrderOwner->execute(['id' => $alreadyApproved]);
+    $approvedUserId = (int) $approvedOrderOwner->fetchColumn();
+    $approvedNotificationCount = $pdo->prepare(
+        "SELECT COUNT(*) FROM notifications
+         WHERE user_id = :user_id AND order_id = :order_id AND title = 'Payment approved'"
+    );
+    $approvedNotificationCount->execute(['user_id' => $approvedUserId, 'order_id' => $alreadyApproved]);
+    $assert(
+        $approveTwice['status'] === 409 && (int) $approvedNotificationCount->fetchColumn() === 1,
+        'Repeating an already-completed approval is rejected without duplicating its notification.'
+    );
 
     $pdo->prepare('UPDATE products SET low_stock_threshold = 5 WHERE id = :id')->execute(['id' => $productId]);
     $lowStockCount = static function (int $ownerId) use ($pdo, $productId): int {
@@ -737,6 +960,12 @@ try {
     $assert($newOrderNotificationCount === 2,
         'The replayed order response must not create duplicate New order notifications for the two owners; count='
             . $newOrderNotificationCount . ' order=' . $idempotentOrderId);
+    $customerOrderNotification = $pdo->prepare(
+        "SELECT COUNT(*) FROM notifications
+         WHERE order_id = :order_id AND user_id = :user_id AND title = 'Order placed'"
+    );
+    $customerOrderNotification->execute(['order_id' => $idempotentOrderId, 'user_id' => $userIds[0]]);
+    $assert((int) $customerOrderNotification->fetchColumn() === 1, 'Replaying order creation notifies the customer only once.');
     $confirmKey = bin2hex(random_bytes(16));
     $confirmFirst = $ownerA->request(
         'POST',
@@ -754,12 +983,18 @@ try {
     );
     $saleCount = $pdo->prepare("SELECT COUNT(*) FROM stock_movements WHERE order_id = :order_id AND type = 'sale'");
     $saleCount->execute(['order_id' => $idempotentOrderId]);
+    $confirmNotificationCount = $pdo->prepare(
+        "SELECT COUNT(*) FROM notifications
+         WHERE order_id = :order_id AND user_id = :user_id AND title = 'Order confirmed'"
+    );
+    $confirmNotificationCount->execute(['order_id' => $idempotentOrderId, 'user_id' => $userIds[0]]);
     $assert(
         $confirmFirst['status'] === 200
             && $confirmReplay['status'] === 200
             && $confirmReplay['body'] === $confirmFirst['body']
-            && (int) $saleCount->fetchColumn() === 1,
-        'Repeating an owner order action must replay once and create exactly one stock movement.'
+            && (int) $saleCount->fetchColumn() === 1
+            && (int) $confirmNotificationCount->fetchColumn() === 1,
+        'Repeating an owner order action must create exactly one stock movement and notification.'
     );
     $ownerOrderNotifications = $pdo->prepare(
         "SELECT COUNT(*) FROM notifications WHERE order_id = :order_id AND title = 'New order' AND user_id IN (:first, :second)"
@@ -801,10 +1036,16 @@ try {
     curl_multi_close($multiAction);
     $parallelSaleCount = $pdo->prepare("SELECT COUNT(*) FROM stock_movements WHERE order_id = :order_id AND type = 'sale'");
     $parallelSaleCount->execute(['order_id' => $parallelActionOrderId]);
+    $parallelConfirmationCount = $pdo->prepare(
+        "SELECT COUNT(*) FROM notifications
+         WHERE user_id = :user_id AND order_id = :order_id AND title = 'Order confirmed'"
+    );
+    $parallelConfirmationCount->execute(['user_id' => $userIds[0], 'order_id' => $parallelActionOrderId]);
     $assert(
         ($parallelActionStatuses === [200, 200] || $parallelActionStatuses === [200, 409])
-            && (int) $parallelSaleCount->fetchColumn() === 1,
-        'Parallel identical payment action requests must create exactly one stock movement.'
+            && (int) $parallelSaleCount->fetchColumn() === 1
+            && (int) $parallelConfirmationCount->fetchColumn() === 1,
+        'Parallel identical payment actions must create one stock movement and one notification.'
     );
 
     $parallelStockKey = bin2hex(random_bytes(16));

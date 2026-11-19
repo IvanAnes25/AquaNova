@@ -10,6 +10,7 @@ import customerPhotoFive from '../assets/customer-purchase-customer-5.png';
 import customerPhotoSix from '../assets/customer-purchase-customer-6.png';
 import Icon from './Icon.jsx';
 import { routePath } from '../lib/paths.js';
+import { shopHoursRows } from '../lib/shopHours.js';
 
 const customerPhotos = [
   { src: customerCouple, alt: 'Two adult customers with their purchase at Aquatica' },
@@ -20,16 +21,6 @@ const customerPhotos = [
   { src: customerPhotoFour, alt: 'Adult customer with an aquarium outside the shop' },
   { src: customerPhotoFive, alt: 'Adult customer at Aquatica' },
   { src: customerPhotoSix, alt: 'Adult customer with a purchase at Aquatica' },
-];
-
-const openingHours = [
-  ['Monday', '7:00 AM – 5:00 PM'],
-  ['Tuesday', '7:00 AM – 5:00 PM'],
-  ['Wednesday', '7:00 AM – 5:00 PM'],
-  ['Thursday', '7:00 AM – 5:00 PM'],
-  ['Friday', '7:00 AM – 5:00 PM'],
-  ['Saturday', '7:00 AM – 5:00 PM'],
-  ['Sunday', 'Closed'],
 ];
 
 const faqTopics = ['Buying', 'Pickup and delivery', 'Fish health', 'Tank setup'];
@@ -113,13 +104,6 @@ const values = [
 
 const directionsUrl = 'https://www.google.com/maps/dir/?api=1&destination=Nasugbu+Aquatica%2C+Nasugbu%2C+Batangas';
 const mapEmbedUrl = 'https://maps.google.com/maps?q=Nasugbu%20Aquatica%2C%20Nasugbu%2C%20Batangas&output=embed';
-
-function getToday() {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Manila',
-    weekday: 'long',
-  }).format(new Date());
-}
 
 function CareImage({ alt, className = '' }) {
   return (
@@ -337,8 +321,9 @@ function OurStory() {
   );
 }
 
-function VisitUs() {
-  const today = getToday();
+function VisitUs({ settings }) {
+  const today = settings?.shopStatus?.today?.toLowerCase();
+  const openingHours = shopHoursRows(settings?.shopHours);
 
   return (
     <section aria-labelledby="visit-us-title" className="about-visit" id="visit-us">
@@ -381,12 +366,14 @@ function VisitUs() {
               </div>
               <table>
                 <tbody>
-                  {openingHours.map(([day, hours]) => (
-                    <tr aria-current={day === today ? 'date' : undefined} className={day === today ? 'is-today' : ''} key={day}>
-                      <th scope="row">{day}{day === today && <span>Today</span>}</th>
+                  {openingHours ? openingHours.map(([day, hours]) => (
+                    <tr aria-current={day.toLowerCase() === today ? 'date' : undefined} className={day.toLowerCase() === today ? 'is-today' : ''} key={day}>
+                      <th scope="row">{day}{day.toLowerCase() === today && <span>Today</span>}</th>
                       <td>{hours}</td>
                     </tr>
-                  ))}
+                  )) : (
+                    <tr><td colSpan="2">Opening hours unavailable.</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -542,7 +529,7 @@ function ContactUs() {
   );
 }
 
-export default function AboutUs() {
+export default function AboutUs({ settings }) {
   useEffect(() => {
     const elements = document.querySelectorAll('.about-page .about-reveal');
 
@@ -571,7 +558,7 @@ export default function AboutUs() {
     <div className="about-page">
       <OurStory />
       <CustomerCarousel />
-      <VisitUs />
+      <VisitUs settings={settings} />
       <Faq />
       <ContactUs />
     </div>

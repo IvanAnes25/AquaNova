@@ -83,7 +83,8 @@ if ($action === 'setup') {
     }
 
     $settingKeys = ['gcash_enabled', 'gcash_name', 'gcash_number', 'gcash_qr_path', 'cod_enabled',
-        'cash_pickup_enabled', 'delivery_fee', 'shop_name', 'shop_address'];
+        'cash_pickup_enabled', 'delivery_fee', 'shop_name', 'shop_address', 'shop_hours',
+        'shop_open_override', 'shop_closed_message', 'accept_orders_when_closed'];
     $settings = [];
     $findSetting = $pdo->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
     foreach ($settingKeys as $key) {
@@ -113,6 +114,18 @@ if ($action === 'setup') {
         'delivery_fee' => '50.00',
         'shop_name' => 'Aquatica Test Shop',
         'shop_address' => 'Test pickup address',
+        'shop_hours' => json_encode([
+            'monday' => ['closed' => false, 'open' => '07:00', 'close' => '17:00'],
+            'tuesday' => ['closed' => false, 'open' => '07:00', 'close' => '17:00'],
+            'wednesday' => ['closed' => false, 'open' => '07:00', 'close' => '17:00'],
+            'thursday' => ['closed' => false, 'open' => '07:00', 'close' => '17:00'],
+            'friday' => ['closed' => false, 'open' => '07:00', 'close' => '17:00'],
+            'saturday' => ['closed' => false, 'open' => '07:00', 'close' => '17:00'],
+            'sunday' => ['closed' => true, 'open' => null, 'close' => null],
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+        'shop_open_override' => 'scheduled',
+        'shop_closed_message' => '',
+        'accept_orders_when_closed' => '1',
     ] as $key => $value) {
         $writeSetting->execute([$key, $value]);
     }
@@ -167,6 +180,26 @@ if ($action === 'adjust-stock') {
     }
 }
 
+if ($action === 'seed-notifications') {
+    $fixture = $json($argv[2] ?? '');
+    $count = filter_var($argv[3] ?? null, FILTER_VALIDATE_INT);
+    if (($fixture['database'] ?? '') !== $testDatabase || $count === false || $count < 1 || $count > 100) {
+        throw new RuntimeException('Invalid isolated notification fixture request.');
+    }
+    $insert = $pdo->prepare(
+        'INSERT INTO notifications (user_id, order_id, title, body)
+         VALUES (:user_id, NULL, :title, :body)'
+    );
+    for ($index = 1; $index <= $count; $index++) {
+        $insert->execute([
+            'user_id' => (int) $fixture['users']['customer']['id'],
+            'title' => 'E2E page message ' . $index,
+            'body' => 'Pagination fixture message ' . $index . '.',
+        ]);
+    }
+    $emit(['created' => $count]);
+}
+
 if ($action === 'inspect') {
     $fixture = $json($argv[2] ?? '');
     $customerIds = [(int) $fixture['users']['customer']['id'], (int) $fixture['users']['secondCustomer']['id']];
@@ -182,6 +215,12 @@ if ($action === 'inspect') {
     $proofs = [];
     $notifications = [];
     $movements = [];
+    $notificationQuery = $pdo->prepare(
+        'SELECT user_id, order_id, title, body, read_at, deleted_at
+         FROM notifications WHERE user_id IN (?, ?, ?) ORDER BY id'
+    );
+    $notificationQuery->execute($userIds);
+    $notifications = $notificationQuery->fetchAll(PDO::FETCH_ASSOC);
     if ($orderIds) {
         $marks = implode(',', array_fill(0, count($orderIds), '?'));
         $proofQuery = $pdo->prepare(
@@ -189,11 +228,6 @@ if ($action === 'inspect') {
         );
         $proofQuery->execute($orderIds);
         $proofs = $proofQuery->fetchAll(PDO::FETCH_ASSOC);
-        $notificationQuery = $pdo->prepare(
-            "SELECT user_id, order_id, title, body, read_at FROM notifications WHERE order_id IN ($marks) ORDER BY id"
-        );
-        $notificationQuery->execute($orderIds);
-        $notifications = $notificationQuery->fetchAll(PDO::FETCH_ASSOC);
         $movementQuery = $pdo->prepare(
             "SELECT order_id, product_id, change_qty, type, reason FROM stock_movements WHERE order_id IN ($marks) ORDER BY id"
         );
@@ -327,5 +361,5 @@ if ($action === 'cleanup') {
     $emit(['cleaned' => true]);
 }
 
-fwrite(STDERR, "Expected setup, adjust-stock, inspect, or cleanup.\n");
+fwrite(STDERR, "Expected setup, adjust-stock, seed-notifications, inspect, or cleanup.\n");
 exit(2);

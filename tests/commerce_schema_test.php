@@ -33,6 +33,10 @@ try {
     $stockImageMigration['up']($pdo);
     $migration->execute(['migration' => '20261120_stock_reason_image_archive']);
     $assert((int) $migration->fetchColumn() === 1, 'Stock reason and product image migration is not recorded as applied.');
+    $shopHoursNotificationMigration = require dirname(__DIR__) . '/database/migrations/20261121_shop_hours_notification_groups.php';
+    $shopHoursNotificationMigration['up']($pdo);
+    $migration->execute(['migration' => '20261121_shop_hours_notification_groups']);
+    $assert((int) $migration->fetchColumn() === 1, 'Shop hours and notification migration is not recorded as applied.');
 
     $requiredTables = [
         'categories', 'addresses', 'cart_items', 'payment_proofs', 'notifications', 'idempotency_requests', 'stock_change_archives',
@@ -53,8 +57,9 @@ try {
         'orders' => [
             'order_no', 'fulfillment', 'payment_method_v2', 'order_status', 'payment_status_v2',
             'delivery_fee', 'delivery_address_snapshot', 'delivery_by', 'stock_deducted',
-            'cancelled_by', 'cancel_reason',
+            'cancelled_by', 'cancel_reason', 'shop_closed_at_order', 'shop_closed_message_snapshot',
         ],
+        'notifications' => ['deleted_at'],
         'order_items' => ['name_snapshot', 'price_snapshot', 'qty'],
         'stock_movements' => ['change_qty', 'type', 'reason', 'order_id', 'user_id'],
         'idempotency_requests' => [
@@ -119,6 +124,12 @@ try {
     );
     $referenceIndex->execute(['table_name' => 'payment_proofs', 'index_name' => 'payment_proofs_reference_unique']);
     $assert((int) $referenceIndex->fetchColumn() === 1, 'Payment reference number must be unique.');
+    $notificationIndex = $pdo->prepare(
+        'SELECT COUNT(*) FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name AND INDEX_NAME = :index_name'
+    );
+    $notificationIndex->execute(['table_name' => 'notifications', 'index_name' => 'notifications_user_deleted_idx']);
+    $assert((int) $notificationIndex->fetchColumn() > 0, 'Notification user/deletion index is missing.');
 
     $legacyRows = (int) $pdo->query(
         'SELECT COUNT(*) FROM products

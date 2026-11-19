@@ -78,6 +78,12 @@ $env:AQUATICA_TEST_MAIL_PORT = '2526'
 php -S 127.0.0.1:8091 tests\api_test_router.php
 ```
 
+The API security suite also tests IP-based rate limiting through `127.0.0.2`; start the same guarded router on that loopback address in a second terminal:
+
+```powershell
+php -S 127.0.0.2:8091 tests\api_test_router.php
+```
+
 In the test terminal, set `AQUATICA_TEST_BASE_URL` to `http://127.0.0.1:8091/AquaNova` and run the API or registration suite. The router preflight rejects a mismatched database before the suite makes API requests.
 
 Use an SMTP mailbox or provider with SMTP credentials and TLS. For example, enter the provider's host, port, username, password, and TLS mode in the ignored `private/auth.php` file. Configure a real sender mailbox; the site never signs in to a user's email account.
@@ -92,7 +98,7 @@ All commerce routes use `/api/v1`. Responses are JSON unless a route explicitly 
 |---|---|---|---|
 | `GET` | `/api/v1/catalog/products` | Public | Search and filter active products |
 | `GET` | `/api/v1/catalog/categories` | Public | List categories containing active products |
-| `GET` | `/api/v1/settings/public` | Public | Shop address, delivery fee, and GCash availability |
+| `GET` | `/api/v1/settings/public` | Public | Shop details, hours, order policy, and PHP-computed status |
 | `GET` | `/api/v1/settings/gcash-qr` | Signed-in user | View the configured shop QR |
 | `GET` | `/api/v1/cart` | Customer | Read the saved cart |
 | `POST` | `/api/v1/cart/items` | Customer | Add a product and quantity |
@@ -108,6 +114,9 @@ All commerce routes use `/api/v1`. Responses are JSON unless a route explicitly 
 | `GET` | `/api/v1/notifications/unread-count` | Signed-in user | Count unread notifications |
 | `PATCH` | `/api/v1/notifications/{id}/read` | Signed-in user | Mark one notification as read |
 | `POST` | `/api/v1/notifications/read-all` | Signed-in user | Mark all notifications as read |
+| `PATCH`, `DELETE` | `/api/v1/notifications/group/read` | Signed-in user | Mark a group read or delete its read messages |
+| `DELETE` | `/api/v1/notifications/{id}` | Owning user | Soft-delete one read notification |
+| `DELETE` | `/api/v1/notifications/read` | Signed-in user | Soft-delete all read notifications |
 
 ### Owner routes
 
@@ -127,9 +136,13 @@ All commerce routes use `/api/v1`. Responses are JSON unless a route explicitly 
 | `GET`, `PATCH`, `PUT` | `/api/v1/owner/settings` | Read or update shop, delivery-fee, payment-option, GCash, and auto-cancel details |
 | `GET`, `POST` | `/api/v1/owner/settings/gcash-qr` | View or upload the shop QR (JPG/PNG, maximum 2 MB) |
 
+`GET /api/v1/settings/public` returns the weekday schedule and a shop status computed by PHP in `Asia/Manila`; the browser displays that result rather than calculating status from its local clock. The owner's manual Open/Closed override supersedes the schedule until returned to scheduled mode. Accepting orders while closed is enabled by default; disabling it blocks checkout but preserves the cart.
+
+Notifications contain important order, payment-proof, status-transition, cancellation, and low-stock events. They are grouped by order (or under “Other” when no order is associated). Unread badges count messages. Messages may be soft-deleted only after being read, individually, by group, or in bulk.
+
 GCash checkout is rejected by the server until the recipient name, number, and QR image are configured. Payment references are unique. Stock is deducted when a GCash proof is approved or a cash order is confirmed; each stock change is recorded in `stock_movements`.
 
-The owner may configure an auto-cancel duration from 1 to 720 hours in Settings; leaving the field blank disables the job. The scheduled CLI command sends one payment reminder four hours before expiry when the configured duration exceeds four hours, then cancels only Pending orders with Unpaid payment older than the order's creation time threshold or Rejected payment older than its latest rejection time threshold. Proofs Under review are never auto-cancelled. Schedule `php scripts\cancel_expired_orders.php` to run periodically (for example, every 15 minutes); it records order history and audit entries and notifies the customer.
+The owner may configure an auto-cancel duration from 1 to 720 hours in Settings; leaving the field blank disables the job. The scheduled CLI command cancels only Pending orders with Unpaid payment older than the order's creation time threshold or Rejected payment older than its latest rejection time threshold. Proofs Under review are never auto-cancelled. Schedule `php scripts\cancel_expired_orders.php` to run periodically (for example, every 15 minutes); it records order history and audit entries and notifies the customer when an order is auto-cancelled.
 
 ## Hostinger deployment
 

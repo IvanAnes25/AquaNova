@@ -366,6 +366,11 @@ test('real PHP API browser flows persist orders, stock, reports, and notificatio
 
     await page.reload();
     await page.getByRole('button', { name: 'Notifications' }).click();
+    const notificationGroups = page.locator('.notification-group-toggle');
+    for (let index = 0; index < await notificationGroups.count(); index++) {
+      await notificationGroups.nth(index).click();
+    }
+    await expect(notificationGroups.filter({ hasText: 'Other' })).toBeVisible();
     await expect(page.locator('.notification-row').filter({ hasText: 'Order placed' })).toHaveCount(6);
     await expect(page.locator('.notification-row').filter({ hasText: 'Payment proof needs an update' })).toHaveCount(1);
     await expect(page.locator('.notification-row').filter({ hasText: 'Payment proof received' })).toHaveCount(3);
@@ -405,4 +410,129 @@ test('real PHP API browser flows persist orders, stock, reports, and notificatio
     await customerTwoContext.close();
     await ownerContext.close();
   }
+});
+
+test('shop status and closed-order policies are visible and enforced', async ({ page, browser }) => {
+  const ownerContext = await browser.newContext();
+  const ownerPage = await ownerContext.newPage();
+  try {
+    await signIn(page, fixture.users.customer);
+    await signIn(ownerPage, fixture.users.owner);
+
+    await navigate(ownerPage, 'Settings');
+    await expect(ownerPage.getByRole('switch', { name: 'Manual shop open override' })).toBeVisible();
+    await expect(ownerPage.getByText('Opening hours (Asia/Manila)')).toBeVisible();
+    await expect(ownerPage.getByLabel('Accept orders when closed')).toBeChecked();
+    const initialSettings = await api(ownerPage, '/api/v1/owner/settings');
+    expect(initialSettings.body.settings.acceptOrdersWhenClosed).toBe(true);
+
+    const manualOpen = await api(ownerPage, '/api/v1/owner/settings', 'PATCH', {
+      shopOpenOverride: 'open',
+      acceptOrdersWhenClosed: true,
+    });
+    expect(manualOpen.status).toBe(200);
+    await page.reload();
+    await navigate(page, 'Home');
+    await expect(page.getByTestId('home-shop-status')).toContainText("We're open · manual override");
+    await expect(page.locator('.topbar .shop-status-header')).toContainText("We're open · manual override");
+
+    const manualClosed = await api(ownerPage, '/api/v1/owner/settings', 'PATCH', {
+      shopOpenOverride: 'closed',
+      shopClosedMessage: 'Test shop closure notice.',
+      acceptOrdersWhenClosed: true,
+    });
+    expect(manualClosed.status).toBe(200);
+    await page.reload();
+    await navigate(page, 'Home');
+    await expect(page.getByTestId('home-shop-status')).toContainText("We're closed · manual override");
+    await expect(page.locator('.topbar .shop-status-header')).toContainText("We're closed · manual override");
+
+    const product = fixture.products.main;
+    await navigate(page, 'Shop');
+    await page.getByRole('button', { name: `Add ${product.name} to cart` }).click();
+    await navigate(page, 'Cart');
+    await page.getByRole('button', { name: 'Continue to checkout' }).click();
+    await page.getByRole('button', { name: /Pick up at shop/ }).click();
+    await page.getByRole('button', { name: 'Cash at the shop' }).click();
+    await expect(page.getByTestId('checkout-shop-closed-notice')).toContainText('processed when the shop opens');
+    await page.getByRole('button', { name: 'Place order' }).click();
+    await expect(page.getByRole('heading', { name: 'Order placed!' })).toBeVisible();
+    const placed = (await api(page, '/api/v1/orders')).body.orders[0];
+    expect(placed).toMatchObject({ shopClosedAtOrder: true });
+    expect(placed.customerNotice).toContain('Test shop closure notice.');
+    await navigate(page, 'My orders');
+    await expect(page.getByText('Test shop closure notice.')).toBeVisible();
+
+    await navigate(page, 'Shop');
+    await page.getByRole('button', { name: `Add ${product.name} to cart` }).click();
+    await navigate(page, 'Cart');
+    await page.getByRole('button', { name: 'Continue to checkout' }).click();
+    const closedPolicy = await api(ownerPage, '/api/v1/owner/settings', 'PATCH', {
+      acceptOrdersWhenClosed: false,
+    });
+    expect(closedPolicy.status).toBe(200);
+    await page.reload();
+    await navigate(page, 'Cart');
+    await page.getByRole('button', { name: 'Continue to checkout' }).click();
+    await expect(page.getByTestId('checkout-shop-closed-notice')).toContainText('not accepting orders');
+    await expect(page.getByRole('button', { name: 'Place order' })).toBeDisabled();
+    const blocked = await api(page, '/api/v1/orders', 'POST', {
+      fulfillment: 'pickup',
+      paymentMethod: 'cash_pickup',
+      name: fixture.users.customer.email,
+      phone: '5550100',
+    });
+    expect(blocked.status).toBe(409);
+    const cart = await api(page, '/api/v1/cart');
+    expect(cart.body.items).toHaveLength(1);
+  } finally {
+    await ownerContext.close();
+  }
+});
+
+test('notifications group by order and support read, soft-delete, and pagination', async ({ page }) => {
+  runFixture('seed-notifications', fixture, 51);
+  await signIn(page, fixture.users.customer);
+  const order = await placeOrder(page, fixture.products.main, { fulfillment: 'Pickup', payment: 'Cash' });
+  await page.getByRole('button', { name: 'Notifications' }).click();
+
+  await expect(page.locator('.notification-group-toggle').filter({ hasText: 'Other' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Notification pages' })).toContainText('Page 1 of 2');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('navigation', { name: 'Notification pages' })).toContainText('Page 2 of 2');
+  await page.getByRole('button', { name: 'Previous' }).click();
+  const orderGroup = page.locator('.notification-group-toggle').filter({ hasText: order.id });
+  await expect(orderGroup).toContainText('Pending');
+
+  const allNotifications = (await api(page, '/api/v1/notifications?page=1&pageSize=100')).body.notifications;
+  const unreadFixture = allNotifications.find((notification) => notification.title === 'E2E page message 1');
+  const singleFixture = allNotifications.find((notification) => notification.title === 'E2E notification');
+  expect(unreadFixture).toBeTruthy();
+  expect(singleFixture).toBeTruthy();
+
+  const blockedDelete = await api(page, `/api/v1/notifications/${unreadFixture.id}`, 'DELETE', {});
+  expect(blockedDelete.status).toBe(409);
+  expect(blockedDelete.body.message).toContain('read before deleting');
+
+  const unreadBeforeSingleRead = (await api(page, '/api/v1/notifications/unread-count')).body.count;
+  const singleRead = await api(page, `/api/v1/notifications/${singleFixture.id}/read`, 'PATCH', {});
+  expect(singleRead.status).toBe(200);
+  expect((await api(page, '/api/v1/notifications/unread-count')).body.count).toBe(unreadBeforeSingleRead - 1);
+
+  await page.locator('.notification-group-toggle').filter({ hasText: 'Other' }).click();
+  await expect(page.locator('.notification-row').filter({ hasText: 'E2E page message 51' })).toBeVisible();
+  await expect(page.locator('.notification-row time').first()).toContainText(/now|second|minute|hour/);
+  await expect(page.locator('.notification-group-toggle').filter({ hasText: 'Other' })).toContainText('0 unread');
+  await page.getByRole('button', { name: 'Delete read' }).click();
+  await expect(page.locator('.notification-group-toggle').filter({ hasText: 'Other' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Mark all as read' }).click();
+  await expect(page.getByRole('button', { name: 'Delete all read' })).toBeVisible();
+  await page.getByRole('button', { name: 'Delete all read' }).click();
+  const remaining = await api(page, '/api/v1/notifications?page=1&pageSize=100');
+  expect(remaining.body.notifications).toHaveLength(0);
+  const snapshot = inspect();
+  const fixtureMessages = snapshot.notifications.filter((notification) =>
+    Number(notification.user_id) === fixture.users.customer.id);
+  expect(fixtureMessages.filter((notification) => notification.deleted_at == null)).toHaveLength(0);
 });

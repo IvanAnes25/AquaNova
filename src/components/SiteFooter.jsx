@@ -1,5 +1,6 @@
 import logoImage from '../assets/nasugbu-aquatica-logo.png';
 import Icon from './Icon.jsx';
+import { shopHoursRows } from '../lib/shopHours.js';
 
 const directionsUrl = 'https://www.google.com/maps/dir/?api=1&destination=Nasugbu+Aquatica%2C+Nasugbu%2C+Batangas';
 
@@ -11,7 +12,8 @@ const exploreLinks = [
   ['FAQ', '#faq'],
 ];
 
-export default function SiteFooter() {
+export default function SiteFooter({ settings }) {
+  const openingHours = shopHoursRows(settings?.shopHours);
   return (
     <footer className="site-footer">
       <div className="site-footer-main">
@@ -45,8 +47,9 @@ export default function SiteFooter() {
 
           <div className="site-footer-hours">
             <h2>Opening hours</h2>
-            <p><span>Monday–Saturday</span><span>7:00 AM–5:00 PM</span></p>
-            <p><span>Sunday</span><span>Closed</span></p>
+            {openingHours
+              ? openingHours.map(([day, hours]) => <p key={day}><span>{day}</span><span>{hours}</span></p>)
+              : <p role="status">Opening hours unavailable.</p>}
             <a className="site-footer-contact" href="#contact">Questions? Contact us</a>
           </div>
         </div>

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import TopBar from './components/TopBar.jsx';
 import SiteHeader from './components/SiteHeader.jsx';
 import HeroSection from './components/HeroSection.jsx';
@@ -12,9 +13,35 @@ import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import ShopPage from './pages/ShopPage.jsx';
 import VerifyEmailPage from './pages/VerifyEmailPage.jsx';
 import { currentAppRoute } from './lib/paths.js';
+import { authGet } from './lib/authApi.js';
 
 export default function App() {
   const route = currentAppRoute();
+  const [shopSettings, setShopSettings] = useState(null);
+  const [shopSettingsError, setShopSettingsError] = useState('');
+  useEffect(() => {
+    if (route !== '/') return undefined;
+    let active = true;
+    const refreshSettings = () => {
+      authGet('/api/v1/settings/public')
+        .then((settings) => {
+          if (active) {
+            setShopSettings(settings);
+            setShopSettingsError('');
+          }
+        })
+        .catch((error) => {
+          if (active) setShopSettingsError(error.message);
+        });
+    };
+    refreshSettings();
+    const timer = window.setInterval(refreshSettings, 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [route]);
+
   if (route === '/login') return <LoginPage />;
   if (route === '/register') return <RegisterPage />;
   if (route === '/verify-email') return <VerifyEmailPage />;
@@ -25,14 +52,14 @@ export default function App() {
 
   return (
     <div id="top" className="min-h-screen bg-white text-[#30475c]">
-      <TopBar />
+      <TopBar shopStatus={shopSettings?.shopStatus} statusError={shopSettingsError} />
       <SiteHeader />
       <main>
-        <HeroSection />
+        <HeroSection shopStatus={shopSettings?.shopStatus} statusError={shopSettingsError} />
         <ShopSection />
-        <AboutUs />
+        <AboutUs settings={shopSettings} />
       </main>
-      <SiteFooter />
+      <SiteFooter settings={shopSettings} />
     </div>
   );
 }

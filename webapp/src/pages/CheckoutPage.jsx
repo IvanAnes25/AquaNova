@@ -11,6 +11,8 @@ export default function CheckoutPage({ cart, subtotal, fee, total, deliveryMetho
   const gcashEnabled = settings.gcashEnabled !== false && Boolean(settings.gcashReady);
   const codEnabled = settings.codEnabled !== false;
   const cashPickupEnabled = settings.cashPickupEnabled !== false;
+  const shopClosed = settings.shopStatus?.isOpen === false;
+  const acceptOrdersWhenClosed = settings.acceptOrdersWhenClosed !== false;
   const selectDefaultPayment = (fulfillment) => {
     if (gcashEnabled) return 'GCash';
     if (fulfillment === 'Delivery' && codEnabled) return 'Cash on delivery';
@@ -22,6 +24,13 @@ export default function CheckoutPage({ cart, subtotal, fee, total, deliveryMetho
       : paymentMethod === 'Cash at the shop' ? cashPickupEnabled : false;
   return <>
     <SectionTitle eyebrow="ONE MORE STEP" title="Checkout" action={<Button variant="secondary" onClick={() => onNavigate('cart')}><Icon name="back" size={16} /> Back to cart</Button>} />
+    {shopClosed && <div className={`shop-closed-notice ${acceptOrdersWhenClosed ? '' : 'shop-closed-notice-blocked'}`} role="status" data-testid="checkout-shop-closed-notice">
+      <b>{settings.shopStatus.statusLine}</b>
+      {settings.shopClosedMessage && <span>{settings.shopClosedMessage}</span>}
+      <span>{acceptOrdersWhenClosed
+        ? 'Orders are accepted and will be processed when the shop opens.'
+        : 'The shop is not accepting orders right now. Your cart is saved; please return when the shop opens.'}</span>
+    </div>}
     <div className="checkout-layout"><div className="checkout-main">
       <section className="panel form-panel">
         <div className="panel-heading"><span className="step-number">01</span><div><h2>How would you like your order?</h2><p>Choose delivery or collect from our shop.</p></div></div>
@@ -46,7 +55,7 @@ export default function CheckoutPage({ cart, subtotal, fee, total, deliveryMetho
         {paymentMethod === 'GCash' && <div className="inline-info"><span className="info-mark">i</span><span>You’ll see the exact amount, GCash details and upload a payment screenshot after placing your order.</span></div>}
       </section>
     </div>
-    <OrderSummary items={cart} subtotal={subtotal} fee={fee} total={total} fulfillment={deliveryMethod} action={<Button className="button-full" disabled={!cart.length || !selectedPaymentEnabled || (deliveryMethod === 'Delivery' && (!checkoutInfo.address.trim() || !checkoutInfo.phone.trim()))} onClick={async () => { await onPlaceOrder(paymentMethod); }}>Place order <Icon name="arrow" size={16} /></Button>} />
+    <OrderSummary items={cart} subtotal={subtotal} fee={fee} total={total} fulfillment={deliveryMethod} action={<Button className="button-full" disabled={!cart.length || !selectedPaymentEnabled || (shopClosed && !acceptOrdersWhenClosed) || (deliveryMethod === 'Delivery' && (!checkoutInfo.address.trim() || !checkoutInfo.phone.trim()))} onClick={async () => { await onPlaceOrder(paymentMethod); }}>Place order <Icon name="arrow" size={16} /></Button>} />
     </div>
   </>;
 }

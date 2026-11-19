@@ -41,6 +41,9 @@ All routes are same-origin PHP endpoints. JSON requests use `Content-Type: appli
 | GET | `/api/v1/notifications/unread-count` | Signed-in user |
 | PATCH | `/api/v1/notifications/{id}/read` | Owning user |
 | POST | `/api/v1/notifications/read-all` | Signed-in user |
+| PATCH, DELETE | `/api/v1/notifications/group/read` | Signed-in user |
+| DELETE | `/api/v1/notifications/{id}` | Owning user; read notifications only |
+| DELETE | `/api/v1/notifications/read` | Signed-in user; read notifications only |
 | GET | `/api/v1/owner/dashboard` | Owner |
 | GET | `/api/v1/owner/orders` | Owner |
 | GET | `/api/v1/owner/orders/{id}` | Owner |
@@ -75,7 +78,13 @@ GET /api/v1/owner/orders?status=needs-action&page=2&per_page=25
 }
 ```
 
-Owner settings accepts partial `PATCH` updates for shop details, `deliveryFee`, `gcashEnabled`, `codEnabled`, `cashPickupEnabled`, and `autoCancelHours`; `PUT` remains supported for compatibility. Disabled payment methods are rejected by checkout even if a customer bypasses the UI.
+### Shop status and notifications
+
+`GET /api/v1/settings/public` returns the configured `shopHours`, `acceptOrdersWhenClosed`, `shopClosedMessage`, and `shopStatus`. `shopStatus` includes `isOpen`, `statusLine`, `timezone` (`Asia/Manila`), `today`, the active override, and the next opening/closing timestamp when scheduled. The PHP API computes this status using Asia/Manila time; clients should display the returned status rather than calculate it from their local clock. The owner settings endpoint accepts `shopHours` (each weekday is closed or has `open` and `close` in `HH:MM`) and `shopOpenOverride` (`scheduled`, `open`, or `closed`). Closing must be after opening.
+
+Notification lists omit soft-deleted messages and include order metadata for grouping; messages without an order belong to “Other.” Unread counts count messages, not groups. Group read/delete requests accept `{"orderId": 123}`; use `{"orderId": null}` for “Other.” Deletion is soft and only applies to read messages. Single-message read uses `PATCH /notifications/{id}/read`; group read uses `PATCH /notifications/group/read`; “Mark all as read” uses `POST /notifications/read-all`. Delete a read group with `DELETE /notifications/group/read`, or all read messages with `DELETE /notifications/read`.
+
+Owner settings accepts partial `PATCH` updates for shop details, `deliveryFee`, `gcashEnabled`, `codEnabled`, `cashPickupEnabled`, `autoCancelHours`, `shopHours`, `shopOpenOverride`, `shopClosedMessage`, and `acceptOrdersWhenClosed`; `PUT` remains supported for compatibility. Disabled payment methods and closed ordering (when the shop is closed and the policy is off) are rejected by checkout even if a customer bypasses the UI.
 
 ## Example requests
 

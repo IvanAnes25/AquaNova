@@ -1,7 +1,10 @@
 import oceanBackground from '../assets/ocean-home-background.png';
 import Icon from './Icon.jsx';
 
-export default function HeroSection() {
+export default function HeroSection({ shopStatus, statusError }) {
+  const statusText = statusError
+    ? 'Shop status unavailable. Please try again later.'
+    : shopStatus?.statusLine || 'Checking shop status…';
   return (
     <section className="home-hero">
       <img
@@ -19,6 +22,10 @@ export default function HeroSection() {
           </h1>
           <p className="home-hero-description">
             Our pet store is dedicated to providing top-quality aquatic animals, cutting-edge equipment, and personalized guidance to ensure a healthy and happy aquatic environment.
+          </p>
+
+          <p className="home-hero-shop-status" role="status" aria-live="polite">
+            {statusText}
           </p>
 
           <div className="home-hero-actions">

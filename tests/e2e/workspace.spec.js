@@ -11,6 +11,7 @@ if (!databaseName || !/^aquanova_test_[a-z0-9_]+$/.test(databaseName)
 
 const fixtureScript = resolve('tests/e2e/real_data_fixture.php');
 const apiOrigin = new URL(process.env.AQUATICA_E2E_URL || 'http://127.0.0.1:5174/webapp/').origin;
+const publicSiteUrl = process.env.AQUATICA_PUBLIC_SITE_URL || 'http://127.0.0.1:8091/AquaNova/';
 const png = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==',
   'base64',
@@ -42,7 +43,37 @@ test.afterEach(() => {
   }
 });
 
-async function signIn(page, user) {
+test('public Home and header show the server-computed shop status and configured hours', async ({ page }) => {
+  const settingsResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith('/api/v1/settings/public'));
+  await page.goto(publicSiteUrl);
+  const response = await settingsResponse;
+  expect(response.status()).toBe(200);
+  const settings = await response.json();
+
+  await expect(page.locator('.site-topbar [role="status"]'))
+    .toHaveText(settings.shopStatus.statusLine);
+  await expect(page.locator('.home-hero-shop-status'))
+    .toHaveText(settings.shopStatus.statusLine);
+  const today = settings.shopStatus.today.charAt(0).toUpperCase()
+    + settings.shopStatus.today.slice(1);
+  await expect(page.locator('.about-hours tr.is-today th')).toContainText(today);
+  await expect(page.locator('.site-footer-hours')).toContainText(today);
+  const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const formatTime = (value) => {
+    const [hour, minute] = value.split(':').map(Number);
+    return `${hour % 12 || 12}:${minute.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}`;
+  };
+  for (const [index, day] of weekdays.entries()) {
+    const hours = settings.shopHours[day];
+    const expected = hours.closed
+      ? 'Closed'
+      : `${formatTime(hours.open)}–${formatTime(hours.close)}`;
+    await expect(page.locator('.about-hours tbody tr').nth(index).locator('td')).toHaveText(expected);
+  }
+});
+
+async function createSession(page, user) {
   const request = page.context().request;
   const csrfResponse = await request.get(`${apiOrigin}/api/auth/csrf.php`);
   expect(csrfResponse.status()).toBe(200);
@@ -55,6 +86,10 @@ async function signIn(page, user) {
   const sessionResponse = await request.get(`${apiOrigin}/api/auth/session.php`);
   const session = await sessionResponse.json();
   expect(session.user.role).toBe(user.role);
+}
+
+async function signIn(page, user) {
+  await createSession(page, user);
   await page.goto('/');
   await expect(page.locator('.sidebar .nav-link-active')).toBeVisible();
 }
@@ -78,7 +113,10 @@ async function navigate(page, label, width = null) {
     await expect(page.locator('.app-shell')).toHaveClass(/mobile-nav-open/);
     await expect(sidebar).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
   }
-  await page.locator('.sidebar .nav-link').filter({ hasText: new RegExp(`^${label}`) }).click();
+  const link = page.locator('.sidebar .nav-link').filter({ hasText: new RegExp(`^${label}`) });
+  await link.click();
+  await expect(link).toHaveClass(/nav-link-active/);
+  await expect(page.locator('.route-loading-bar')).toHaveCount(0);
 }
 
 async function api(page, path, method = 'GET', data = undefined) {
@@ -99,6 +137,45 @@ async function api(page, path, method = 'GET', data = undefined) {
     return { status: response.status, body };
   }, { path, method, data });
 }
+
+test('transient login bootstrap failures stay in the workspace and can retry', async ({ page }) => {
+  let failSessionCheck = true;
+  let failCatalogLoad = true;
+  await page.route('**/api/auth/session.php', async (route) => {
+    if (failSessionCheck) {
+      failSessionCheck = false;
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: 'Temporary session-check failure.' }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route('**/api/v1/catalog/products**', async (route) => {
+    if (failCatalogLoad) {
+      failCatalogLoad = false;
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: 'Temporary catalog failure.' }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await createSession(page, fixture.users.customer);
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('Temporary session-check failure.');
+  await expect(page).not.toHaveURL(/\/login(?:\/|$)/);
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.locator('.toast')).toContainText('Temporary catalog failure.');
+  await expect(page).not.toHaveURL(/\/login(?:\/|$)/);
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.locator('.shop-status-header')).toBeVisible();
+});
 
 async function doubleClickOnce(page, button, method, pathPattern) {
   let requestCount = 0;
@@ -306,6 +383,27 @@ test('customer Shop, Cart, Orders, and Account remain usable at 390px with real 
   const order = await placeOrder(page, fixture.products.main);
   await saveScreenshot(page, 'real-data-customer-gcash-390.png');
   expect(order.paymentStatus).toBe('Unpaid');
+});
+
+test('mobile workspace header fits at 320px', async ({ page }) => {
+  await signIn(page, fixture.users.customer);
+  await page.setViewportSize({ width: 320, height: 740 });
+  await navigate(page, 'My account', 320);
+
+  const header = page.locator('.topbar');
+  await expect(header.locator('.mobile-menu')).toBeVisible();
+  await expect(header.locator('.app-back-button')).toBeVisible();
+  await expect(header.locator('.breadcrumb b')).toHaveText('My account');
+  await expect(header.locator('.shop-status-header-compact')).toBeVisible();
+  await expect(header.locator('.notification-button')).toBeVisible();
+  await expect(header.locator('.top-avatar')).toBeVisible();
+
+  const dimensions = await header.evaluate((element) => {
+    const right = Math.max(...[...element.querySelectorAll('button, .shop-status-header, .breadcrumb')]
+      .map((child) => child.getBoundingClientRect().right));
+    return { right, viewport: document.documentElement.clientWidth };
+  });
+  expect(dimensions.right, 'header controls must remain within the viewport').toBeLessThanOrEqual(dimensions.viewport);
 });
 
 test('Shop keeps every category visible and restores category/search filters from its URL', async ({ page }) => {

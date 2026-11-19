@@ -52,6 +52,15 @@ try {
         $controller->updateCustomerProfile();
     } elseif ($segments === ['notifications'] && $method === 'GET') {
         $controller->notifications();
+    } elseif ($segments === ['notifications', 'group', 'read'] && $method === 'PATCH') {
+        $controller->markNotificationGroupRead();
+    } elseif ($segments === ['notifications', 'group', 'read'] && $method === 'DELETE') {
+        $controller->deleteReadNotificationGroup();
+    } elseif ($segments === ['notifications', 'read'] && $method === 'DELETE') {
+        $controller->deleteAllReadNotifications();
+    } elseif (count($segments) === 2 && $segments[0] === 'notifications'
+        && ctype_digit($segments[1]) && $method === 'DELETE') {
+        $controller->deleteNotification((int) $segments[1]);
     } elseif (count($segments) === 3 && $segments[0] === 'notifications' && $segments[2] === 'read'
         && ctype_digit($segments[1]) && $method === 'PATCH') {
         $controller->markNotificationRead((int) $segments[1]);

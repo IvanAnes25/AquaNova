@@ -9,6 +9,31 @@ export default function SettingsPage({ settings, onSave }) {
   const savingLock = useRef(false);
   useEffect(() => setValues(settings), [settings]);
   const update = (key, value) => setValues((current) => ({ ...current, [key]: value }));
+  const updateDay = (day, key, value) => setValues((current) => {
+    const shopHours = current.shopHours || settings.shopHours || {};
+    return {
+      ...current,
+      shopHours: {
+        ...shopHours,
+        [day]: { ...shopHours[day], [key]: value },
+      },
+    };
+  });
+  const setDayClosed = (day, closed) => setValues((current) => {
+    const shopHours = current.shopHours || settings.shopHours || {};
+    const previous = shopHours[day] || {};
+    return {
+      ...current,
+      shopHours: {
+        ...shopHours,
+        [day]: {
+          closed,
+          open: closed ? null : (previous.open || '07:00'),
+          close: closed ? null : (previous.close || '17:00'),
+        },
+      },
+    };
+  });
 
   async function submit(event) {
     event.preventDefault();
@@ -27,6 +52,10 @@ export default function SettingsPage({ settings, onSave }) {
       gcashEnabled: values.gcashEnabled !== false,
       codEnabled: values.codEnabled !== false,
       cashPickupEnabled: values.cashPickupEnabled !== false,
+      shopHours: values.shopHours || settings.shopHours,
+      shopOpenOverride: values.shopOpenOverride || 'scheduled',
+      shopClosedMessage: values.shopClosedMessage || '',
+      acceptOrdersWhenClosed: values.acceptOrdersWhenClosed !== false,
       autoCancelHours: values.autoCancelHours === '' || values.autoCancelHours == null
         ? null
         : Number(values.autoCancelHours),
@@ -46,6 +75,60 @@ export default function SettingsPage({ settings, onSave }) {
           <Field label="Contact number"><input className="input" value={values.shopPhone || ''} onChange={(event) => update('shopPhone', event.target.value)} /></Field>
           <Field label="Shop address" className="field-full"><input className="input" value={values.shopAddress || ''} onChange={(event) => update('shopAddress', event.target.value)} /></Field>
           <Field label="About your shop" className="field-full"><textarea className="input textarea" value={values.about || ''} onChange={(event) => update('about', event.target.value)} /></Field>
+          <Field label="Shop status" className="field-full">
+            <div className="shop-override-control">
+              <span>{values.shopOpenOverride === 'scheduled'
+                ? `Following weekday hours (${settings.shopStatus?.isOpen ? 'currently open' : 'currently closed'})`
+                : `Manual override: ${values.shopOpenOverride === 'open' ? 'Open' : 'Closed'}`}</span>
+              <label className="shop-override-switch">
+                <span>Open</span>
+                <button
+                  type="button"
+                  className={`toggle-switch ${(values.shopOpenOverride === 'scheduled'
+                    ? Boolean(settings.shopStatus?.isOpen)
+                    : values.shopOpenOverride === 'open') ? 'toggle-on' : ''}`}
+                  role="switch"
+                  aria-label="Manual shop open override"
+                  aria-checked={values.shopOpenOverride === 'scheduled'
+                    ? Boolean(settings.shopStatus?.isOpen)
+                    : values.shopOpenOverride === 'open'}
+                  onClick={() => {
+                    const currentlyOpen = values.shopOpenOverride === 'scheduled'
+                      ? Boolean(settings.shopStatus?.isOpen)
+                      : values.shopOpenOverride === 'open';
+                    update('shopOpenOverride', currentlyOpen ? 'closed' : 'open');
+                  }}
+                ><i /></button>
+              </label>
+              {values.shopOpenOverride !== 'scheduled'
+                && <Button type="button" variant="secondary" onClick={() => update('shopOpenOverride', 'scheduled')}>Follow weekday hours</Button>}
+            </div>
+            <span className="field-hint">A manual Open/Closed setting overrides the schedule until you choose Follow weekday hours.</span>
+          </Field>
+          <Field label="Opening hours (Asia/Manila)" className="field-full">
+            <div className="shop-hours-list">
+              {[
+                ['monday', 'Monday'], ['tuesday', 'Tuesday'], ['wednesday', 'Wednesday'],
+                ['thursday', 'Thursday'], ['friday', 'Friday'], ['saturday', 'Saturday'], ['sunday', 'Sunday'],
+              ].map(([day, label]) => {
+                const hours = values.shopHours?.[day] || settings.shopHours?.[day] || { closed: true, open: '', close: '' };
+                return <div className="shop-hours-row" key={day}>
+                  <b>{label}</b>
+                  <label><input type="checkbox" checked={Boolean(hours.closed)} onChange={(event) => setDayClosed(day, event.target.checked)} /> Closed</label>
+                  <input className="input" aria-label={`${label} opens`} type="time" value={hours.open || ''} disabled={hours.closed} onChange={(event) => updateDay(day, 'open', event.target.value)} />
+                  <span>to</span>
+                  <input className="input" aria-label={`${label} closes`} type="time" value={hours.close || ''} disabled={hours.closed} onChange={(event) => updateDay(day, 'close', event.target.value)} />
+                </div>;
+              })}
+            </div>
+          </Field>
+          <Field label="Message when closed" className="field-full">
+            <textarea className="input textarea" maxLength="500" value={values.shopClosedMessage || ''} onChange={(event) => update('shopClosedMessage', event.target.value)} />
+            <span className="field-hint">Optional message shown to customers while the shop is closed.</span>
+          </Field>
+          <Field label="Accept orders when closed" className="field-full">
+            <label className="shop-accept-closed"><input type="checkbox" checked={values.acceptOrdersWhenClosed !== false} onChange={(event) => update('acceptOrdersWhenClosed', event.target.checked)} /> Accept orders when closed; process them when the shop opens</label>
+          </Field>
           <Field label="Delivery fee (PHP)"><input className="input" min="0" step="0.01" type="number" value={values.deliveryFee ?? 0} onChange={(event) => update('deliveryFee', event.target.value)} /></Field>
           <Field label="Auto-cancel pending orders (hours)"><input className="input" min="1" max="720" step="1" type="number" value={values.autoCancelHours ?? ''} onChange={(event) => update('autoCancelHours', event.target.value)} /><span className="field-hint">Unpaid orders expire after this many hours. Rejected orders expire this long after rejection. Proofs Under review are never auto-cancelled. Leave blank to disable.</span></Field>
           <Field label="GCash recipient name"><input className="input" value={values.gcashName || ''} onChange={(event) => update('gcashName', event.target.value)} /></Field>

@@ -217,6 +217,134 @@ final class CommerceController
         return $settings;
     }
 
+    private function defaultShopHours(): array
+    {
+        $hours = [];
+        foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day) {
+            $hours[$day] = [
+                'closed' => $day === 'sunday',
+                'open' => $day === 'sunday' ? null : '07:00',
+                'close' => $day === 'sunday' ? null : '17:00',
+            ];
+        }
+        return $hours;
+    }
+
+    private function normalizeShopHours(mixed $value): array
+    {
+        $days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+        if (!is_array($value) || count($value) !== count($days) || array_diff($days, array_keys($value))) {
+            throw new InvalidArgumentException('Provide opening hours for every day of the week.');
+        }
+
+        $normalized = [];
+        foreach ($days as $day) {
+            $entry = $value[$day] ?? null;
+            if (!is_array($entry) || !isset($entry['closed']) || !is_bool($entry['closed'])) {
+                throw new InvalidArgumentException('Choose whether each weekday is open or closed.');
+            }
+            if ($entry['closed']) {
+                $normalized[$day] = ['closed' => true, 'open' => null, 'close' => null];
+                continue;
+            }
+            $opening = $entry['open'] ?? null;
+            $closing = $entry['close'] ?? null;
+            if (!is_string($opening) || !is_string($closing)
+                || !preg_match('/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/', $opening)
+                || !preg_match('/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/', $closing)
+                || $closing <= $opening) {
+                throw new InvalidArgumentException('For open days, closing time must be after opening time.');
+            }
+            $normalized[$day] = ['closed' => false, 'open' => $opening, 'close' => $closing];
+        }
+        return $normalized;
+    }
+
+    private function shopHours(array $settings): array
+    {
+        if (!array_key_exists('shop_hours', $settings)) {
+            return $this->defaultShopHours();
+        }
+        $hours = json_decode((string) $settings['shop_hours'], true);
+        if (!is_array($hours) || json_last_error() !== JSON_ERROR_NONE) {
+            throw new RuntimeException('Saved shop hours are invalid.');
+        }
+        try {
+            return $this->normalizeShopHours($hours);
+        } catch (InvalidArgumentException $exception) {
+            throw new RuntimeException('Saved shop hours are invalid.', 0, $exception);
+        }
+    }
+
+    private function shopStatus(array $settings): array
+    {
+        $timezone = new DateTimeZone('Asia/Manila');
+        $now = new DateTimeImmutable('now', $timezone);
+        $hours = $this->shopHours($settings);
+        $override = (string) ($settings['shop_open_override'] ?? 'scheduled');
+        if (!in_array($override, ['scheduled', 'open', 'closed'], true)) {
+            throw new RuntimeException('Saved shop status override is invalid.');
+        }
+        if ($override !== 'scheduled') {
+            $isOpen = $override === 'open';
+            return [
+                'isOpen' => $isOpen,
+                'statusLine' => $isOpen ? "We're open · manual override" : "We're closed · manual override",
+                'timezone' => 'Asia/Manila',
+                'override' => $override,
+                'today' => strtolower($now->format('l')),
+                'nextOpenAt' => null,
+                'closesAt' => null,
+            ];
+        }
+
+        $today = strtolower($now->format('l'));
+        $todayHours = $hours[$today];
+        if (!$todayHours['closed']) {
+            $opensAt = new DateTimeImmutable($now->format('Y-m-d') . ' ' . $todayHours['open'], $timezone);
+            $closesAt = new DateTimeImmutable($now->format('Y-m-d') . ' ' . $todayHours['close'], $timezone);
+            if ($now >= $opensAt && $now < $closesAt) {
+                return [
+                    'isOpen' => true,
+                    'statusLine' => "We're open · closes at " . $closesAt->format('g:i A'),
+                    'timezone' => 'Asia/Manila',
+                    'override' => 'scheduled',
+                    'today' => $today,
+                    'nextOpenAt' => null,
+                    'closesAt' => $closesAt->format(DATE_ATOM),
+                ];
+            }
+        }
+
+        $nextOpening = null;
+        for ($offset = 0; $offset <= 7; $offset++) {
+            $date = $now->setTime(0, 0)->modify('+' . $offset . ' days');
+            $dayHours = $hours[strtolower($date->format('l'))];
+            if ($dayHours['closed']) {
+                continue;
+            }
+            $candidate = new DateTimeImmutable($date->format('Y-m-d') . ' ' . $dayHours['open'], $timezone);
+            if ($candidate > $now) {
+                $nextOpening = $candidate;
+                break;
+            }
+        }
+        $openingLabel = $nextOpening === null
+            ? 'no opening time scheduled'
+            : ($nextOpening->format('Y-m-d') === $now->format('Y-m-d')
+                ? 'today at ' . $nextOpening->format('g:i A')
+                : $nextOpening->format('l') . ' at ' . $nextOpening->format('g:i A'));
+        return [
+            'isOpen' => false,
+            'statusLine' => "We're closed · opens " . $openingLabel,
+            'timezone' => 'Asia/Manila',
+            'override' => 'scheduled',
+            'today' => $today,
+            'nextOpenAt' => $nextOpening?->format(DATE_ATOM),
+            'closesAt' => null,
+        ];
+    }
+
     private function setting(string $key, string $default = ''): string
     {
         return (string) ($this->settings()[$key] ?? $default);
@@ -400,6 +528,12 @@ final class CommerceController
             'stockDeducted' => (bool) $row['stock_deducted'],
             'deliveryBy' => $row['delivery_by'],
             'cancelReason' => $row['cancel_reason'],
+            'shopClosedAtOrder' => (bool) ($row['shop_closed_at_order'] ?? false),
+            'shopClosedMessage' => $row['shop_closed_message_snapshot'] ?? null,
+            'customerNotice' => !empty($row['shop_closed_at_order'])
+                ? (string) ($row['shop_closed_message_snapshot']
+                    ?? 'The shop was closed when you placed this order. It will be processed when the shop opens.')
+                : null,
         ];
     }
 
@@ -663,6 +797,11 @@ final class CommerceController
             'gcashName' => $settings['gcash_name'] ?? '',
             'gcashNumber' => $settings['gcash_number'] ?? '',
             'gcashQrUrl' => !empty($settings['gcash_qr_path']) ? '/api/v1/settings/gcash-qr' : null,
+            'shopHours' => $this->shopHours($settings),
+            'shopOpenOverride' => $settings['shop_open_override'] ?? 'scheduled',
+            'shopClosedMessage' => $settings['shop_closed_message'] ?? '',
+            'acceptOrdersWhenClosed' => ($settings['accept_orders_when_closed'] ?? '1') === '1',
+            'shopStatus' => $this->shopStatus($settings),
         ]);
     }
 
@@ -780,6 +919,19 @@ final class CommerceController
             json_response(['message' => 'Choose a payment method available for the selected fulfillment method.'], 422);
         }
         $shopSettings = $this->settings();
+        $shopStatus = $this->shopStatus($shopSettings);
+        $shopClosedAtOrder = !$shopStatus['isOpen'];
+        $acceptOrdersWhenClosed = ($shopSettings['accept_orders_when_closed'] ?? '1') === '1';
+        if ($shopClosedAtOrder && !$acceptOrdersWhenClosed) {
+            json_response([
+                'message' => trim((string) ($shopSettings['shop_closed_message'] ?? ''))
+                    ?: 'The shop is closed and is not accepting orders right now.',
+            ], 409);
+        }
+        $closedMessage = trim((string) ($shopSettings['shop_closed_message'] ?? ''));
+        if ($closedMessage === '') {
+            $closedMessage = 'The shop is closed. Your order will be processed when the shop opens.';
+        }
         $paymentEnabled = match ($payment) {
             'gcash' => ($shopSettings['gcash_enabled'] ?? '1') === '1',
             'cod' => ($shopSettings['cod_enabled'] ?? '1') === '1',
@@ -840,11 +992,13 @@ final class CommerceController
             'INSERT INTO orders
              (order_number, user_id, customer_name, customer_email, phone, delivery_method, delivery_address,
               payment_method, subtotal, total, notes, status, payment_status, order_no, fulfillment,
-              payment_method_v2, order_status, payment_status_v2, delivery_fee, delivery_address_snapshot)
+              payment_method_v2, order_status, payment_status_v2, delivery_fee, delivery_address_snapshot,
+              shop_closed_at_order, shop_closed_message_snapshot)
              VALUES
              (:order_number, :user_id, :name, :email, :phone, :delivery_method, :delivery_address,
               :payment_method, :subtotal, :total, :notes, :legacy_status, :legacy_payment_status, :order_no,
-              :fulfillment, :payment_method_v2, :status, :payment_status_v2, :delivery_fee, :snapshot)'
+              :fulfillment, :payment_method_v2, :status, :payment_status_v2, :delivery_fee, :snapshot,
+              :shop_closed_at_order, :shop_closed_message_snapshot)'
         );
         $insert->execute([
             'order_number' => $orderNo,
@@ -867,6 +1021,8 @@ final class CommerceController
             'payment_status_v2' => 'unpaid',
             'delivery_fee' => $fee,
             'snapshot' => json_encode($address, JSON_UNESCAPED_SLASHES),
+            'shop_closed_at_order' => $shopClosedAtOrder ? 1 : 0,
+            'shop_closed_message_snapshot' => $shopClosedAtOrder ? $closedMessage : null,
         ]);
         $orderId = (int) $db->lastInsertId();
         $itemInsert = $db->prepare(
@@ -2299,6 +2455,11 @@ final class CommerceController
                 && !empty($settings['gcash_name']) && !empty($settings['gcash_number']) && !empty($settings['gcash_qr_path']),
             'gcashQrUrl' => !empty($settings['gcash_qr_path']) ? '/api/v1/owner/settings/gcash-qr' : null,
             'autoCancelHours' => isset($settings['auto_cancel_hours']) ? (int) $settings['auto_cancel_hours'] : null,
+            'shopHours' => $this->shopHours($settings),
+            'shopOpenOverride' => $settings['shop_open_override'] ?? 'scheduled',
+            'shopClosedMessage' => $settings['shop_closed_message'] ?? '',
+            'acceptOrdersWhenClosed' => ($settings['accept_orders_when_closed'] ?? '1') === '1',
+            'shopStatus' => $this->shopStatus($settings),
         ]]);
     }
 
@@ -2313,16 +2474,18 @@ final class CommerceController
             'about' => ['shop_about', 1000],
             'gcashName' => ['gcash_name', 120],
             'gcashNumber' => ['gcash_number', 13],
+            'shopClosedMessage' => ['shop_closed_message', 500],
         ];
         $flagFields = [
             'gcashEnabled' => 'gcash_enabled',
             'codEnabled' => 'cod_enabled',
             'cashPickupEnabled' => 'cash_pickup_enabled',
+            'acceptOrdersWhenClosed' => 'accept_orders_when_closed',
         ];
         $allowedFields = array_merge(
             array_keys($fields),
             array_keys($flagFields),
-            ['deliveryFee', 'autoCancelHours']
+            ['deliveryFee', 'autoCancelHours', 'shopHours', 'shopOpenOverride']
         );
         if (array_diff(array_keys($data), $allowedFields)) {
             json_response(['message' => 'The settings request contains unsupported fields.'], 422);
@@ -2365,10 +2528,27 @@ final class CommerceController
             if (array_key_exists($input, $data)) {
                 $value = $data[$input];
                 if (!is_bool($value) && !(is_int($value) && in_array($value, [0, 1], true))) {
-                    json_response(['message' => 'Payment options must be true or false.'], 422);
+                    json_response(['message' => 'Settings options must be true or false.'], 422);
                 }
                 $validated[$settingKey] = $value ? '1' : '0';
             }
+        }
+        if (array_key_exists('shopHours', $data)) {
+            try {
+                $validated['shop_hours'] = json_encode(
+                    $this->normalizeShopHours($data['shopHours']),
+                    JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+                );
+            } catch (InvalidArgumentException $exception) {
+                json_response(['message' => $exception->getMessage()], 422);
+            }
+        }
+        if (array_key_exists('shopOpenOverride', $data)) {
+            if (!is_string($data['shopOpenOverride'])
+                || !in_array($data['shopOpenOverride'], ['scheduled', 'open', 'closed'], true)) {
+                json_response(['message' => 'Choose scheduled hours or a manual open/closed override.'], 422);
+            }
+            $validated['shop_open_override'] = $data['shopOpenOverride'];
         }
         $removeAutoCancelSetting = false;
         if (array_key_exists('autoCancelHours', $data)) {
@@ -2465,9 +2645,12 @@ final class CommerceController
             json_response(['message' => 'Please log in to continue.'], 401);
         }
         $result = $this->paginatedQuery(
-            'SELECT id, order_id, title, body, read_at, created_at
-             FROM notifications WHERE user_id = :id ORDER BY created_at DESC',
-            'SELECT COUNT(*) FROM notifications WHERE user_id = :id',
+            'SELECT n.id, n.order_id, n.title, n.body, n.read_at, n.created_at,
+                    o.order_no AS order_number, o.order_status
+             FROM notifications n LEFT JOIN orders o ON o.id = n.order_id
+             WHERE n.user_id = :id AND n.deleted_at IS NULL
+             ORDER BY n.created_at DESC, n.id DESC',
+            'SELECT COUNT(*) FROM notifications WHERE user_id = :id AND deleted_at IS NULL',
             ['id' => $user['id']]
         );
         json_response(['notifications' => $result['rows'], 'pagination' => $result['pagination']]);
@@ -2479,7 +2662,9 @@ final class CommerceController
         if ($user === null) {
             json_response(['message' => 'Please log in to continue.'], 401);
         }
-        $statement = $this->db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = :id AND read_at IS NULL');
+        $statement = $this->db()->prepare(
+            'SELECT COUNT(*) FROM notifications WHERE user_id = :id AND read_at IS NULL AND deleted_at IS NULL'
+        );
         $statement->execute(['id' => $user['id']]);
         json_response(['count' => (int) $statement->fetchColumn()]);
     }
@@ -2491,17 +2676,57 @@ final class CommerceController
             json_response(['message' => 'Please log in to continue.'], 401);
         }
         require_csrf();
-        $check = $this->db()->prepare('SELECT user_id FROM notifications WHERE id = :id');
+        $check = $this->db()->prepare(
+            'SELECT user_id FROM notifications WHERE id = :id AND deleted_at IS NULL'
+        );
         $check->execute(['id' => $id]);
         $ownerId = $check->fetchColumn();
         if ($ownerId === false || (int) $ownerId !== (int) $user['id']) {
             json_response(['message' => 'Notification not found.'], 404);
         }
         $statement = $this->db()->prepare(
-            'UPDATE notifications SET read_at = UTC_TIMESTAMP() WHERE id = :id AND user_id = :user_id'
+            'UPDATE notifications SET read_at = UTC_TIMESTAMP()
+             WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL'
         );
         $statement->execute(['id' => $id, 'user_id' => $user['id']]);
         json_response(['message' => 'Notification marked as read.']);
+    }
+
+    private function notificationGroupOrderId(array $data): ?int
+    {
+        if (array_diff(array_keys($data), ['orderId']) || !array_key_exists('orderId', $data)) {
+            json_response(['message' => 'Provide an orderId (or null for Other).'], 422);
+        }
+        if ($data['orderId'] === null) {
+            return null;
+        }
+        $orderId = filter_var($data['orderId'], FILTER_VALIDATE_INT);
+        if ($orderId === false || $orderId < 1) {
+            json_response(['message' => 'The notification group orderId is invalid.'], 422);
+        }
+        return $orderId;
+    }
+
+    public function markNotificationGroupRead(): never
+    {
+        $user = current_auth_user();
+        if ($user === null) {
+            json_response(['message' => 'Please log in to continue.'], 401);
+        }
+        require_csrf();
+        $orderId = $this->notificationGroupOrderId($this->body());
+        if ($orderId === null) {
+            $this->db()->prepare(
+                'UPDATE notifications SET read_at = UTC_TIMESTAMP()
+                 WHERE user_id = :user_id AND order_id IS NULL AND read_at IS NULL AND deleted_at IS NULL'
+            )->execute(['user_id' => $user['id']]);
+        } else {
+            $this->db()->prepare(
+                'UPDATE notifications SET read_at = UTC_TIMESTAMP()
+                 WHERE user_id = :user_id AND order_id = :order_id AND read_at IS NULL AND deleted_at IS NULL'
+            )->execute(['user_id' => $user['id'], 'order_id' => $orderId]);
+        }
+        json_response(['message' => 'Notification group marked as read.']);
     }
 
     public function markAllNotificationsRead(): never
@@ -2512,9 +2737,71 @@ final class CommerceController
         }
         require_csrf();
         $this->db()->prepare(
-            'UPDATE notifications SET read_at = UTC_TIMESTAMP() WHERE user_id = :user_id AND read_at IS NULL'
+            'UPDATE notifications SET read_at = UTC_TIMESTAMP()
+             WHERE user_id = :user_id AND read_at IS NULL AND deleted_at IS NULL'
         )->execute(['user_id' => $user['id']]);
         json_response(['message' => 'Notifications marked as read.']);
+    }
+
+    public function deleteNotification(int $id): never
+    {
+        $user = current_auth_user();
+        if ($user === null) {
+            json_response(['message' => 'Please log in to continue.'], 401);
+        }
+        require_csrf();
+        $statement = $this->db()->prepare(
+            'SELECT user_id, read_at FROM notifications WHERE id = :id AND deleted_at IS NULL'
+        );
+        $statement->execute(['id' => $id]);
+        $notification = $statement->fetch();
+        if (!$notification || (int) $notification['user_id'] !== (int) $user['id']) {
+            json_response(['message' => 'Notification not found.'], 404);
+        }
+        if ($notification['read_at'] === null) {
+            json_response(['message' => 'Mark this notification as read before deleting it.'], 409);
+        }
+        $this->db()->prepare(
+            'UPDATE notifications SET deleted_at = UTC_TIMESTAMP()
+             WHERE id = :id AND user_id = :user_id AND read_at IS NOT NULL AND deleted_at IS NULL'
+        )->execute(['id' => $id, 'user_id' => $user['id']]);
+        json_response(['message' => 'Notification deleted.']);
+    }
+
+    public function deleteReadNotificationGroup(): never
+    {
+        $user = current_auth_user();
+        if ($user === null) {
+            json_response(['message' => 'Please log in to continue.'], 401);
+        }
+        require_csrf();
+        $orderId = $this->notificationGroupOrderId($this->body());
+        if ($orderId === null) {
+            $this->db()->prepare(
+                'UPDATE notifications SET deleted_at = UTC_TIMESTAMP()
+                 WHERE user_id = :user_id AND order_id IS NULL AND read_at IS NOT NULL AND deleted_at IS NULL'
+            )->execute(['user_id' => $user['id']]);
+        } else {
+            $this->db()->prepare(
+                'UPDATE notifications SET deleted_at = UTC_TIMESTAMP()
+                 WHERE user_id = :user_id AND order_id = :order_id AND read_at IS NOT NULL AND deleted_at IS NULL'
+            )->execute(['user_id' => $user['id'], 'order_id' => $orderId]);
+        }
+        json_response(['message' => 'Read notifications in this group deleted.']);
+    }
+
+    public function deleteAllReadNotifications(): never
+    {
+        $user = current_auth_user();
+        if ($user === null) {
+            json_response(['message' => 'Please log in to continue.'], 401);
+        }
+        require_csrf();
+        $this->db()->prepare(
+            'UPDATE notifications SET deleted_at = UTC_TIMESTAMP()
+             WHERE user_id = :user_id AND read_at IS NOT NULL AND deleted_at IS NULL'
+        )->execute(['user_id' => $user['id']]);
+        json_response(['message' => 'All read notifications deleted.']);
     }
 
     public function customerProfile(): never

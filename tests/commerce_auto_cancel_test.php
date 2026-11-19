@@ -205,28 +205,32 @@ try {
     $secondRun = $runJob();
     $assert(str_contains($secondRun['output'], 'Cancelled 0'), 'Repeated job runs do not cancel the same order twice.');
 
-    $reminderOrder = $createOrder('reminder', 'unpaid', true, null, false);
+    $noReminderOrder = $createOrder('no-reminder', 'unpaid', true, null, false);
     $pdo->prepare(
         'UPDATE orders SET created_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 21 HOUR) WHERE id = :id'
-    )->execute(['id' => $reminderOrder]);
+    )->execute(['id' => $noReminderOrder]);
     $pdo->prepare(
         'INSERT INTO settings (setting_key, setting_value) VALUES (:key, :value)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)'
     )->execute(['key' => 'auto_cancel_hours', 'value' => '24']);
-    $reminderRuns = $runJobsConcurrently();
-    $reminderOutput = implode("\n", array_column($reminderRuns, 'output'));
+    $noReminderRuns = $runJobsConcurrently();
+    $noReminderOutput = implode("\n", array_column($noReminderRuns, 'output'));
     $assert(
-        substr_count($reminderOutput, 'Sent 1 payment reminder(s).') === 1
-            && substr_count($reminderOutput, 'Sent 0 payment reminder(s).') === 1,
-        'Concurrent auto-cancel runs send exactly one reminder for an order 20-24 hours old.'
+        substr_count($noReminderOutput, 'Payment reminders are disabled.') === 2,
+        'Concurrent auto-cancel runs do not send nonessential payment reminders.'
     );
     $reminderCount = $pdo->prepare(
         "SELECT COUNT(*) FROM notifications WHERE order_id = :id AND title = 'Payment reminder'"
     );
-    $reminderCount->execute(['id' => $reminderOrder]);
-    $assert((int) $reminderCount->fetchColumn() === 1, 'A payment reminder is recorded once per order.');
-    $reminderRepeat = $runJob();
-    $assert(str_contains($reminderRepeat['output'], 'Sent 0 payment reminder(s).'), 'Repeated job runs do not repeat a sent reminder.');
+    $reminderCount->execute(['id' => $noReminderOrder]);
+    $assert((int) $reminderCount->fetchColumn() === 0, 'Nonessential payment reminders are not recorded.');
+    $noReminderRepeat = $runJob();
+    $reminderCount->execute(['id' => $noReminderOrder]);
+    $assert(
+        str_contains($noReminderRepeat['output'], 'Payment reminders are disabled.')
+            && (int) $reminderCount->fetchColumn() === 0,
+        'Repeated auto-cancel runs never add a nonessential payment reminder.'
+    );
 
     fwrite(STDOUT, "Commerce auto-cancel tests passed ($assertions assertions).\n");
 } catch (Throwable $exception) {

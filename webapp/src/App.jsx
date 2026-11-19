@@ -48,6 +48,8 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionError, setSessionError] = useState('');
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [accessLoading, setAccessLoading] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -61,6 +63,8 @@ export default function App() {
   const [report, setReport] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [notificationPagination, setNotificationPagination] = useState(null);
+  const [notificationPage, setNotificationPage] = useState(1);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState('');
@@ -98,36 +102,49 @@ export default function App() {
   useEffect(() => {
     let active = true;
     async function restoreSession() {
+      let authenticatedUser = null;
+      setSessionLoading(true);
+      setSessionError('');
       try {
         const session = await authGet('/api/auth/session.php');
         if (!active) return;
-        if (!session.user) {
+        authenticatedUser = session.user;
+        if (!authenticatedUser) {
           window.location.replace(websiteLoginPath());
           return;
         }
-        if (session.user.mustChangePassword) {
-          setUser(session.user);
-          setRole(session.user.role);
+        if (authenticatedUser.mustChangePassword) {
+          setUser(authenticatedUser);
+          setRole(authenticatedUser.role);
           setSessionLoading(false);
           return;
         }
-        const verified = await verifyRole(session.user.role);
+        const verified = await verifyRole(authenticatedUser.role);
         if (!active) return;
         setUser(verified);
         setRole(verified.role);
         const requestedPage = new URLSearchParams(window.location.search).get('page');
         const rolePages = verified.role === 'owner' ? ownerPages : [...customerPages, 'checkout', 'payment', 'order-detail', 'order-placed', 'proof-submitted'];
         setPage(rolePages.includes(requestedPage) ? requestedPage : (verified.role === 'owner' ? 'dashboard' : 'home'));
-        await reloadWorkspace(verified.role);
-      } catch {
-        if (active) window.location.replace(websiteLoginPath());
+        try {
+          await reloadWorkspace(verified.role);
+        } catch (error) {
+          if (active) notify(error.message, () => reloadWorkspaceWithRetry(verified.role));
+        }
+      } catch (error) {
+        if (!active) return;
+        if (!authenticatedUser && Number(error?.status) === 401) {
+          window.location.replace(websiteLoginPath());
+          return;
+        }
+        setSessionError(error.message || 'Could not verify your account. Please try again.');
       } finally {
         if (active) setSessionLoading(false);
       }
     }
     restoreSession();
     return () => { active = false; };
-  }, []);
+  }, [sessionAttempt]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -235,7 +252,7 @@ export default function App() {
           commerceGetAll('/orders', ['orders']),
           commerceGet('/account/profile'),
           commerceGet('/settings/public'),
-          commerceGetAll('/notifications', ['notifications']),
+          commerceGet('/notifications?page=1&pageSize=50'),
           commerceGet('/notifications/unread-count'),
         ]);
         setProducts(catalog.products);
@@ -245,6 +262,8 @@ export default function App() {
         setCustomer(profileData.profile);
         setSettings(shopSettings);
         setNotifications(notificationData.notifications);
+        setNotificationPagination(notificationData.pagination);
+        setNotificationPage(1);
         setUnreadNotifications(notificationCount.count);
         return;
       }
@@ -259,7 +278,7 @@ export default function App() {
           commerceGet('/owner/settings'),
           commerceGetAll('/owner/customers', ['customers']),
           commerceGet('/owner/reports'),
-          commerceGetAll('/notifications', ['notifications']),
+          commerceGet('/notifications?page=1&pageSize=50'),
           commerceGet('/notifications/unread-count'),
         ]);
         setProducts(catalog.products);
@@ -269,12 +288,36 @@ export default function App() {
         setCustomers(customerData.customers);
         setReport(reportData);
         setNotifications(notificationData.notifications);
+        setNotificationPagination(notificationData.pagination);
+        setNotificationPage(1);
         setUnreadNotifications(notificationCount.count);
       }
     } finally {
       workspaceLoadCount.current -= 1;
       if (workspaceLoadCount.current === 0) setWorkspaceLoading(false);
     }
+  }
+  async function reloadWorkspaceWithRetry(currentRole = role) {
+    try {
+      await reloadWorkspace(currentRole);
+    } catch (error) {
+      notify(error.message, () => reloadWorkspaceWithRetry(currentRole));
+    }
+  }
+  async function reloadNotificationPage(targetPage = notificationPage) {
+    const [notificationData, notificationCount] = await Promise.all([
+      commerceGet(`/notifications?page=${targetPage}&pageSize=50`),
+      commerceGet('/notifications/unread-count'),
+    ]);
+    const pageCount = Number(notificationData.pagination?.pages) || 0;
+    const resolvedPage = pageCount === 0 ? 1 : Math.min(targetPage, pageCount);
+    if (resolvedPage !== targetPage) {
+      return reloadNotificationPage(resolvedPage);
+    }
+    setNotifications(notificationData.notifications);
+    setNotificationPagination(notificationData.pagination);
+    setNotificationPage(resolvedPage);
+    setUnreadNotifications(notificationCount.count);
   }
   const verifyRole = async (requiredRole) => {
     if (!['customer', 'owner'].includes(requiredRole)) {
@@ -327,7 +370,7 @@ export default function App() {
       const url = `${window.location.pathname}?${params.toString()}`;
       window.history[replace ? 'replaceState' : 'pushState']({ page: nextPage }, '', url);
     } catch (error) {
-      clearSession(error.message);
+      notify(error.message, () => navigate(nextPage, { replace, remember }));
     } finally {
       setAccessLoading(false);
     }
@@ -657,6 +700,17 @@ export default function App() {
       notify(error.message, () => saveAccountProfile());
     }
   };
+  const runNotificationMutation = async (path, method, body = {}) => {
+    const perform = async () => {
+      try {
+        await commerceRequest(path, method, body);
+        await reloadNotificationPage(notificationPage);
+      } catch (error) {
+        notify(error.message, () => perform());
+      }
+    };
+    await perform();
+  };
   const pageProps = {
     products, orders, movements, cart, subtotal, fee, total, customer, setCustomer, category, setCategory,
     query, setQuery, orderFilter, setFilter: setOrderFilter, onNavigate: navigate, onProduct: setSelectedProduct,
@@ -667,7 +721,7 @@ export default function App() {
   let content;
   switch (page) {
     case 'home': content = <HomePage {...pageProps} />; break;
-    case 'shop': content = <ShopPage {...pageProps} products={filteredProducts} categories={categories} category={category} setCategory={changeShopCategory} query={query} setQuery={changeShopQuery} cartCount={cartCount} loading={catalogLoading || workspaceLoading} />; break;
+    case 'shop': content = <ShopPage {...pageProps} products={filteredProducts} categories={categories} category={category} setCategory={changeShopCategory} query={query} setQuery={changeShopQuery} cartCount={cartCount} settings={settings} loading={catalogLoading || workspaceLoading} />; break;
     case 'cart': content = <CartPage {...pageProps} />; break;
     case 'checkout': content = <CheckoutPage {...pageProps} onPlaceOrder={placeOrder} />; break;
     case 'payment': content = <PaymentPage order={paymentOrder} settings={settings} proofRef={proofRef} setProofRef={(value) => { setProofRef(value); setProofError(''); }} proofFile={proofFile} onFile={chooseProof} proofError={proofError} onSubmit={submitProof} onNavigate={navigate} onCopy={copyText} />; break;
@@ -690,13 +744,27 @@ export default function App() {
     case 'reports': content = <ReportsPage products={products} report={report} onToast={notify} />; break;
     case 'account': content = <AccountPage customer={customer} setCustomer={setCustomer} onSave={saveAccountProfile} onToast={notify} />; break;
     case 'settings': content = <SettingsPage settings={settings} onSave={async (values, qrFile) => { const doSave = async () => { try { await commerceRequest('/owner/settings', 'PATCH', values); if (qrFile) { const form = new FormData(); form.append('qr', qrFile); await commerceRequest('/owner/settings/gcash-qr', 'POST', form); } await reloadWorkspace('owner'); notify('Settings saved.'); } catch (error) { notify(error.message, () => doSave()); } }; await doSave(); }} onToast={notify} />; break;
-    case 'notifications': content = <NotificationsPage notifications={notifications} onRead={async (id) => { const doRead = async () => { try { await commerceRequest(`/notifications/${id}/read`, 'PATCH'); await reloadWorkspace(role); } catch (error) { notify(error.message, () => doRead()); } }; await doRead(); }} onReadAll={async () => { const doReadAll = async () => { try { await commerceRequest('/notifications/read-all', 'POST'); await reloadWorkspace(role); } catch (error) { notify(error.message, () => doReadAll()); } }; await doReadAll(); }} loading={workspaceLoading} />; break;
+    case 'notifications': content = <NotificationsPage
+      notifications={notifications}
+      pagination={notificationPagination}
+      unreadCount={unreadNotifications}
+      page={notificationPage}
+      onPage={reloadNotificationPage}
+      onRead={(id) => runNotificationMutation(`/notifications/${id}/read`, 'PATCH')}
+      onReadGroup={(orderId) => runNotificationMutation('/notifications/group/read', 'PATCH', { orderId })}
+      onReadAll={() => runNotificationMutation('/notifications/read-all', 'POST')}
+      onDelete={(id) => runNotificationMutation(`/notifications/${id}`, 'DELETE')}
+      onDeleteGroup={(orderId) => runNotificationMutation('/notifications/group/read', 'DELETE', { orderId })}
+      onDeleteAll={() => runNotificationMutation('/notifications/read', 'DELETE')}
+      loading={workspaceLoading}
+    />; break;
     case 'order-placed': content = <Confirmation icon="check" title="Order placed!" text={`Thanks, ${customer.name.split(' ')[0] || 'there'}. Your order ${activeOrderId ? `#${activeOrderId}` : ''} is in. We’ll keep you posted as it moves along.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;
     case 'proof-submitted': content = <Confirmation icon="clock" title="Payment received for review" text={`We’ve got your GCash proof for order ${proofOrderId}. Our team will check it and update your order soon.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;
     default: content = <DashboardPage orders={orders} products={products} onNavigate={navigate} onOpenOrder={openOrderModal} />;
   }
   const pendingCount = orders.filter(orderNeedsAction).length;
   if (sessionLoading) return <main className="auth-loading"><span className="auth-loading-mark">A</span><p>Checking your account…</p></main>;
+  if (sessionError) return <main className="auth-loading"><div className="auth-password-form" role="alert"><h1>Could not verify your account</h1><p>{sessionError}</p><Button onClick={() => setSessionAttempt((current) => current + 1)}>Try again</Button></div></main>;
   if (!user || !role) return <main className="auth-loading"><span className="auth-loading-mark">A</span><p>Redirecting to the website sign in…</p></main>;
   if (user.mustChangePassword) {
     return <FirstLoginPasswordPage onComplete={() => {
@@ -706,9 +774,9 @@ export default function App() {
   }
   return <div className={`app-shell ${mobileMenu ? 'mobile-nav-open' : ''}`}>
     {accessLoading && <div className="route-loading-bar" aria-hidden="true" />}
-    <Sidebar role={role} page={page} user={user} onNavigate={navigate} cartCount={cartCount} pendingCount={pendingCount} mobileMenu={mobileMenu} onClose={() => setMobileMenu(false)} onLogout={logout} />
-    <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button>{['cart', 'checkout', 'payment', 'order-detail', 'notifications', 'account', 'orders', 'products', 'inventory', 'settings'].includes(page) && <button className="app-back-button" onClick={goBack}><Icon name="back" size={16} /> Back</button>}<div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
-      <div className="topbar-actions"><span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" onClick={() => navigate(page === 'notifications' ? (role === 'owner' ? 'dashboard' : 'home') : 'notifications')}><Icon name="bell" size={18} />{unreadNotifications > 0 && <i />}</button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
+    <Sidebar role={role} page={page} user={user} shopStatus={settings.shopStatus} onNavigate={navigate} cartCount={cartCount} pendingCount={pendingCount} mobileMenu={mobileMenu} onClose={() => setMobileMenu(false)} onLogout={logout} />
+    <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button>{['cart', 'checkout', 'payment', 'order-detail', 'notifications', 'account', 'orders', 'products', 'inventory', 'settings'].includes(page) && <button className="app-back-button" aria-label="Back" onClick={goBack}><Icon name="back" size={16} /><span className="app-back-label">Back</span></button>}<div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
+      <div className="topbar-actions">{settings.shopStatus && <span className={`shop-status-line shop-status-header ${settings.shopStatus.isOpen ? 'shop-status-open' : 'shop-status-closed'}`} role="status" aria-label={settings.shopStatus.statusLine} title={settings.shopStatus.statusLine}><span className="shop-status-header-full">{settings.shopStatus.statusLine}</span><span className="shop-status-header-compact" aria-hidden="true">{settings.shopStatus.isOpen ? 'Open' : 'Closed'}</span></span>}<span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" aria-description={`${unreadNotifications} unread messages`} onClick={() => navigate(page === 'notifications' ? (role === 'owner' ? 'dashboard' : 'home') : 'notifications')}><Icon name="bell" size={18} />{unreadNotifications > 0 && <span className="notification-badge">{unreadNotifications > 99 ? '99+' : unreadNotifications}</span>}</button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
     </header><div className="content-area">{accessLoading ? <SkeletonRoute /> : selectedProduct ? <ProductDetails product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={addToCart} /> : content}</div>
     <footer className="app-footer"><span>© 2026 Aquatica Nasugbu</span><span>Made for little pieces of the ocean <i>✳</i></span></footer></main>
     {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}{toastRetry && <button className="toast-retry" onClick={() => { const retry = toastRetry; setToast(''); setToastRetry(null); retry(); }}>Retry</button>}<button aria-label="Dismiss notification" onClick={() => { setToast(''); setToastRetry(null); }}><Icon name="close" size={15} /></button></div>}

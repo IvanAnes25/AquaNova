@@ -29,7 +29,7 @@ function LinkGroup({ title, items, page, onNavigate, cartCount, pendingCount }) 
   })}</div>;
 }
 
-export default function Sidebar({ role, page, user, onNavigate, cartCount, pendingCount, mobileMenu, onClose, onLogout }) {
+export default function Sidebar({ role, page, user, shopStatus, onNavigate, cartCount, pendingCount, mobileMenu, onClose, onLogout }) {
   const isOwner = role === 'owner';
   return <>
     <aside className="sidebar">
@@ -39,7 +39,7 @@ export default function Sidebar({ role, page, user, onNavigate, cartCount, pendi
           ? <LinkGroup title="SHOP MANAGEMENT" items={ownerLinks} page={page} onNavigate={onNavigate} cartCount={cartCount} pendingCount={pendingCount} />
           : <LinkGroup title="YOUR AQUATICA" items={customerLinks} page={page} onNavigate={onNavigate} cartCount={cartCount} pendingCount={pendingCount} />}
       </div>
-      <div className="sidebar-bottom"><div className="online-status"><span /> Your shop is open</div>
+      <div className="sidebar-bottom">{shopStatus && <div className={`online-status ${shopStatus.isOpen ? 'online-status-open' : 'online-status-closed'}`} role="status"><span /> {shopStatus.statusLine}</div>}
         <div className="user-profile"><span className="avatar owner-avatar">{(user?.name || 'A').slice(0, 1).toUpperCase()}</span><span><b>{user?.name || 'Aquatica'}</b><small>{isOwner ? 'Shop administrator' : 'Customer account'}</small></span><button className="profile-logout" onClick={onLogout}>Log out</button></div>
       </div>
     </aside>

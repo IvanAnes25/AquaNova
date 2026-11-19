@@ -64,6 +64,34 @@ if (str_starts_with($requestPath, $authPath)) {
     return true;
 }
 
+$rootAssetsPath = $projectPath . '/assets/';
+if (str_starts_with($requestPath, $rootAssetsPath)) {
+    $publicRoot = realpath($projectRoot . '/public/assets');
+    $relativePath = substr($requestPath, strlen($rootAssetsPath));
+    if (str_contains($relativePath, '..') || str_contains($relativePath, '\\') || $publicRoot === false) {
+        http_response_code(404);
+        return true;
+    }
+
+    $file = realpath($publicRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath));
+    if ($file === false || !str_starts_with($file, $publicRoot . DIRECTORY_SEPARATOR) || !is_file($file)) {
+        http_response_code(404);
+        return true;
+    }
+
+    $contentTypes = [
+        'css' => 'text/css; charset=utf-8',
+        'js' => 'text/javascript; charset=utf-8',
+        'png' => 'image/png',
+        'svg' => 'image/svg+xml',
+        'woff2' => 'font/woff2',
+    ];
+    $extension = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+    header('Content-Type: ' . ($contentTypes[$extension] ?? 'application/octet-stream'));
+    readfile($file);
+    return true;
+}
+
 $webappPath = $projectPath . '/webapp';
 if ($requestPath === $webappPath || str_starts_with($requestPath, $webappPath . '/')) {
     $publicRoot = realpath($projectRoot . '/public/webapp');
