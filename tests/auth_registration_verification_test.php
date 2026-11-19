@@ -105,6 +105,15 @@ try {
     $assert($ready, 'Local SMTP catcher must accept connections before registration.');
 
     $client = new RegistrationTestClient($baseUrl, $cookieFile);
+    $smtpConfig = $client->request('GET', '/api/test/smtp-config');
+    $assert(
+        $smtpConfig['status'] === 200
+            && ($smtpConfig['json']['mailHost'] ?? '') === '127.0.0.1'
+            && (string) ($smtpConfig['json']['mailPort'] ?? '') === (string) $port
+            && ($smtpConfig['json']['databaseConfigured'] ?? false) === true
+            && str_starts_with((string) ($smtpConfig['json']['isolatedDatabase'] ?? ''), 'aquanova_test_'),
+        'The API server under test must use the local SMTP catcher and isolated test database; set AQUATICA_TEST_MAIL_HOST=127.0.0.1 and AQUATICA_TEST_MAIL_PORT=2526.'
+    );
     $csrf = $client->request('GET', '/api/auth/csrf.php');
     $client->csrfToken = (string) ($csrf['json']['csrfToken'] ?? '');
     $assert($csrf['status'] === 200 && $client->csrfToken !== '', 'Registration must obtain an initial CSRF token.');

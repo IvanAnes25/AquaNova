@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Icon from './Icon.jsx';
 import Sidebar, { customerPages, ownerPages } from './components/Sidebar.jsx';
 import { Button, Field, Modal } from './components/UI.jsx';
 import { money } from './lib/format.js';
 import { orderNeedsAction } from './data.js';
 import { authGet, authPost } from './lib/authApi.js';
-import { commerceGet, commerceGetAll, commerceRequest } from './lib/commerceApi.js';
+import { commerceGet, commerceGetAll, commerceRequest, createIdempotencyKey } from './lib/commerceApi.js';
 import { commercePath } from './lib/commerceApi.js';
 import AccountPage from './pages/AccountPage.jsx';
 import CartPage from './pages/CartPage.jsx';
@@ -44,12 +44,13 @@ function stored(key, fallback) {
 }
 
 export default function App() {
-  const [page, setPage] = useState('login');
+  const [page, setPage] = useState(() => new URLSearchParams(window.location.search).get('page') === 'shop' ? 'shop' : 'login');
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [accessLoading, setAccessLoading] = useState(false);
   const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [orders, setOrders] = useState([]);
   const [cart, setCart] = useState([]);
   const [movements, setMovements] = useState([]);
@@ -60,10 +61,11 @@ export default function App() {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState('');
+  const [toastRetry, setToastRetry] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [activeOrderId, setActiveOrderId] = useState(null);
-  const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('All items');
+  const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get('q') || '');
+  const [category, setCategory] = useState(() => new URLSearchParams(window.location.search).get('category') || 'All items');
   const [orderFilter, setOrderFilter] = useState('Needs action');
   const [deliveryMethod, setDeliveryMethod] = useState('Delivery');
   const [paymentMethod, setPaymentMethod] = useState('GCash');
@@ -75,8 +77,18 @@ export default function App() {
   const [rejectReason, setRejectReason] = useState('');
   const [cancelReason, setCancelReason] = useState('');
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [savingStock, setSavingStock] = useState(false);
+  const productSaveLock = useRef(false);
+  const stockSaveLock = useRef(false);
+  const orderPlaceLock = useRef(false);
+  const requestKeys = useRef(new Map());
+  const pendingCartUpdate = useRef(null);
+  const navigationStack = useRef([]);
   const [productForm, setProductForm] = useState({ name: '', category: 'Fish', price: '', stock: '', size: '', description: '' });
-  const [stockForm, setStockForm] = useState({ productId: '', quantity: '', reason: 'Restock', note: '' });
+  const [stockForm, setStockForm] = useState({ productId: '', quantity: '', reason: 'Restock', reasonText: '', note: '', confirmLargeChange: false });
+  const [productImageFile, setProductImageFile] = useState(null);
+  const [savingImage, setSavingImage] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -98,7 +110,9 @@ export default function App() {
         if (!active) return;
         setUser(verified);
         setRole(verified.role);
-        setPage(verified.role === 'owner' ? 'dashboard' : 'home');
+        const requestedPage = new URLSearchParams(window.location.search).get('page');
+        const rolePages = verified.role === 'owner' ? ownerPages : [...customerPages, 'checkout', 'payment', 'order-detail', 'order-placed', 'proof-submitted'];
+        setPage(rolePages.includes(requestedPage) ? requestedPage : (verified.role === 'owner' ? 'dashboard' : 'home'));
         await reloadWorkspace(verified.role);
       } catch {
         if (active) window.location.replace(websiteLoginPath());
@@ -112,7 +126,10 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(''), 3200);
+    const timer = window.setTimeout(() => {
+      setToast('');
+      setToastRetry(null);
+    }, 3200);
     return () => window.clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
@@ -142,11 +159,60 @@ export default function App() {
     const categoryMatches = category === 'All items' || product.category === category;
     return categoryMatches && `${product.name} ${product.category}`.toLowerCase().includes(query.toLowerCase());
   }), [category, products, query]);
-  const notify = (message) => setToast(message);
+  const notify = (message, retry = null) => {
+    setToast(message);
+    setToastRetry(() => (typeof retry === 'function' ? retry : null));
+  };
+  const requestKey = (scope) => {
+    if (!requestKeys.current.has(scope)) requestKeys.current.set(scope, createIdempotencyKey());
+    return requestKeys.current.get(scope);
+  };
+  const clearRequestKey = (scope) => requestKeys.current.delete(scope);
+  const clearDefinitiveRequestKey = (scope, error) => {
+    const status = Number(error?.status);
+    if (status >= 400 && status < 500
+      && !(status === 409 && /already in progress/i.test(String(error?.message || '')))) {
+      clearRequestKey(scope);
+    }
+  };
+  const updateShopUrl = (nextCategory = category, nextQuery = query, push = false) => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('page', 'shop');
+    if (nextCategory === 'All items') params.delete('category');
+    else params.set('category', nextCategory);
+    if (nextQuery.trim()) params.set('q', nextQuery.trim());
+    else params.delete('q');
+    const url = `${window.location.pathname}?${params.toString()}`;
+    window.history[push ? 'pushState' : 'replaceState']({ page: 'shop' }, '', url);
+  };
+  const changeShopCategory = (nextCategory) => {
+    const value = nextCategory === category && nextCategory !== 'All items' ? 'All items' : nextCategory;
+    setCategory(value);
+    updateShopUrl(value, query, true);
+  };
+  const changeShopQuery = (value) => {
+    setQuery(value);
+    updateShopUrl(category, value);
+  };
+  useEffect(() => {
+    const restoreShopFilters = () => {
+      const params = new URLSearchParams(window.location.search);
+      setCategory(params.get('category') || 'All items');
+      setQuery(params.get('q') || '');
+      const requestedPage = params.get('page');
+      const allowedPages = role === 'owner'
+        ? [...ownerPages, 'home']
+        : [...customerPages, 'checkout', 'payment', 'order-detail', 'order-placed', 'proof-submitted'];
+      if (allowedPages.includes(requestedPage)) setPage(requestedPage);
+    };
+    window.addEventListener('popstate', restoreShopFilters);
+    return () => window.removeEventListener('popstate', restoreShopFilters);
+  }, [role]);
   async function reloadWorkspace(currentRole = role) {
     if (currentRole === 'customer') {
-      const [catalog, cartData, orderData, profileData, shopSettings, notificationData, notificationCount] = await Promise.all([
+      const [catalog, categoryData, cartData, orderData, profileData, shopSettings, notificationData, notificationCount] = await Promise.all([
         commerceGetAll('/catalog/products', ['products']),
+        commerceGetAll('/catalog/categories', ['categories']),
         commerceGetAll('/cart', ['items']),
         commerceGetAll('/orders', ['orders']),
         commerceGet('/account/profile'),
@@ -155,6 +221,7 @@ export default function App() {
         commerceGet('/notifications/unread-count'),
       ]);
       setProducts(catalog.products);
+      setCategories(categoryData.categories.map((item) => item.name));
       setCart(cartData.items.map((item) => ({ productId: item.id, name: item.name, price: item.price, quantity: item.quantity })));
       setOrders(orderData.orders);
       setCustomer(profileData.profile);
@@ -204,7 +271,11 @@ export default function App() {
     setModal(null);
     window.location.replace(websiteLoginPath());
   };
-  const navigate = async (nextPage) => {
+  const navigate = async (nextPage, { replace = false, remember = true } = {}) => {
+    if (nextPage !== 'checkout') orderPlaceLock.current = false;
+    if (nextPage === 'cart' && pendingCartUpdate.current) {
+      await pendingCartUpdate.current;
+    }
     const requiredRole = ownerPages.includes(nextPage)
       ? 'owner'
       : [...customerPages, 'checkout', 'payment', 'order-detail', 'order-placed', 'proof-submitted'].includes(nextPage)
@@ -224,48 +295,74 @@ export default function App() {
         const verified = await verifyRole(requiredRole);
         setUser(verified);
       }
+      if (remember && page !== nextPage) navigationStack.current.push(page);
       setPage(nextPage);
       setQuery('');
       setMobileMenu(false);
       setSelectedProduct(null);
+      const params = new URLSearchParams(window.location.search);
+      params.set('page', nextPage);
+      const url = `${window.location.pathname}?${params.toString()}`;
+      window.history[replace ? 'replaceState' : 'pushState']({ page: nextPage }, '', url);
     } catch (error) {
       clearSession(error.message);
     } finally {
       setAccessLoading(false);
     }
   };
-  const runOwnerAction = async (action) => {
+  const goBack = () => {
+    const parents = {
+      cart: 'shop', checkout: 'cart', payment: 'checkout', 'order-detail': 'my-orders',
+      notifications: role === 'owner' ? 'dashboard' : 'home',
+      account: 'home', orders: 'dashboard', products: 'dashboard', inventory: 'dashboard',
+      settings: 'dashboard',
+    };
+    const previousPage = navigationStack.current.pop() || parents[page] || (role === 'owner' ? 'dashboard' : 'home');
+    navigate(previousPage, { replace: true, remember: false });
+  };
+  const runOwnerAction = async (action, retry = null) => {
     try {
       await verifyRole('owner');
       await action();
     } catch (error) {
-      notify(error.message);
+      notify(error.message, retry ? () => runOwnerAction(retry) : null);
     }
   };
   const cancelOrder = async (order, reason = 'Cancelled by customer') => {
+    const scope = `order.cancel.${order.databaseId}`;
     try {
       if (role === 'owner') {
-        await commerceRequest(`/owner/orders/${order.databaseId}/actions`, 'POST', { action: 'cancel', reason });
+        await commerceRequest(`/owner/orders/${order.databaseId}/actions`, 'POST', { action: 'cancel', reason }, requestKey(scope));
         await reloadWorkspace('owner');
+        clearRequestKey(scope);
       } else {
-        await commerceRequest(`/orders/${order.databaseId}/cancel`, 'POST', { reason });
+        await commerceRequest(`/orders/${order.databaseId}/cancel`, 'POST', { reason }, requestKey(scope));
         await reloadWorkspace('customer');
+        clearRequestKey(scope);
       }
       setModal(null);
       setCancelReason('');
       notify(`${order.id} has been cancelled.`);
     } catch (error) {
-      notify(error.message);
+      clearDefinitiveRequestKey(scope, error);
+      notify(error.message, () => cancelOrder(order, reason));
     }
   };
-  const addToCart = async (product, quantity = 1) => {
-    try {
-      await commerceRequest('/cart/items', 'POST', { productId: product.id, quantity });
-      await reloadWorkspace('customer');
-      notify(`${product.name} added to cart.`);
-    } catch (error) {
-      notify(error.message);
-    }
+  const addToCart = (product, quantity = 1) => {
+    const operation = (async () => {
+      try {
+        await commerceRequest('/cart/items', 'POST', { productId: product.id, quantity });
+        await reloadWorkspace('customer');
+        notify(`${product.name} added to cart.`);
+      } catch (error) {
+        notify(error.message);
+      }
+    })();
+    pendingCartUpdate.current = operation;
+    operation.finally(() => {
+      if (pendingCartUpdate.current === operation) pendingCartUpdate.current = null;
+    });
+    return operation;
   };
   const changeCartQty = async (productId, amount) => {
     const item = cart.find((line) => line.productId === productId);
@@ -278,7 +375,10 @@ export default function App() {
     }
   };
   const placeOrder = async (method) => {
+    if (orderPlaceLock.current) return;
+    orderPlaceLock.current = true;
     const paymentMethod = method === 'GCash' ? 'gcash' : method === 'Cash on delivery' ? 'cod' : 'cash_pickup';
+    const scope = 'order.create';
     try {
       const result = await commerceRequest('/orders', 'POST', {
         fulfillment: deliveryMethod === 'Delivery' ? 'delivery' : 'pickup',
@@ -287,20 +387,24 @@ export default function App() {
         phone: customer.phone,
         address: customer.address,
         notes: customer.notes,
-      });
+      }, requestKey(scope));
       await reloadWorkspace('customer');
+      clearRequestKey(scope);
       setActiveOrderId(result.order.id);
       if (paymentMethod === 'gcash') {
         setProofOrderId(result.order.id);
         setProofRef('');
         setProofFile(null);
         setProofError('');
-        setPage('payment');
+        navigate('payment');
       } else {
-        setPage('order-placed');
+        navigate('order-placed');
       }
     } catch (error) {
-      notify(error.message);
+      clearDefinitiveRequestKey(scope, error);
+      notify(error.message, () => placeOrder(method));
+    } finally {
+      orderPlaceLock.current = false;
     }
   };
   const submitProof = async (orderId) => {
@@ -322,13 +426,17 @@ export default function App() {
       const form = new FormData();
       form.append('reference', reference);
       form.append('proof', proofFile);
-      await commerceRequest(`/orders/${order.databaseId}/payment-proof`, 'POST', form);
+      const scope = `proof.submit.${order.databaseId}`;
+      await commerceRequest(`/orders/${order.databaseId}/payment-proof`, 'POST', form, requestKey(scope));
       await reloadWorkspace('customer');
+      clearRequestKey(scope);
       setProofError('');
-      setPage('proof-submitted');
+      navigate('proof-submitted');
       notify('Payment proof submitted for review.');
     } catch (error) {
+      clearDefinitiveRequestKey(`proof.submit.${order.databaseId}`, error);
       setProofError(error.message);
+      notify(error.message, () => submitProof(orderId));
     }
   };
   const chooseProof = (file) => {
@@ -345,51 +453,131 @@ export default function App() {
     }
   };
   const ownerOrderAction = async (order, action, values = {}) => {
-    await commerceRequest(`/owner/orders/${order.databaseId}/actions`, 'POST', { action, ...values });
-    await reloadWorkspace('owner');
-    setModal(null);
-    setRejectReason('');
-    setCancelReason('');
-    notify(`Order ${order.id} updated.`);
+    const scope = `order.action.${order.databaseId}.${action}`;
+    try {
+      await commerceRequest(`/owner/orders/${order.databaseId}/actions`, 'POST', { action, ...values }, requestKey(scope));
+      await reloadWorkspace('owner');
+      clearRequestKey(scope);
+      setModal(null);
+      setRejectReason('');
+      setCancelReason('');
+      notify(`Order ${order.id} updated.`);
+    } catch (error) {
+      clearDefinitiveRequestKey(scope, error);
+      throw error;
+    }
   };
   const approvePayment = (order) => ownerOrderAction(order, 'approve_proof');
   const rejectPayment = (order) => ownerOrderAction(order, 'reject_proof', { reason: rejectReason.trim() });
   const confirmOrder = (order) => ownerOrderAction(order, 'confirm_cash');
   const markOrderReady = (order, deliveryBy) => ownerOrderAction(order, 'mark_ready', { deliveryBy });
   const completeOrder = (order) => ownerOrderAction(order, 'complete');
-  const saveProduct = async (event) => {
-    event.preventDefault();
-    const result = await commerceRequest('/owner/products', 'POST', {
-      name: productForm.name.trim(), category: productForm.category,
-      price: Number(productForm.price), stock: Number(productForm.stock),
-      description: productForm.description || 'Freshly stocked at Aquatica Nasugbu.',
-    });
-    await reloadWorkspace('owner');
-    setModal(null);
-    setProductForm({ name: '', category: 'Fish', price: '', stock: '', size: '', description: '' });
-    notify('Product added to your catalog.');
+  const saveProduct = async () => {
+    if (productSaveLock.current) return;
+    productSaveLock.current = true;
+    setSavingProduct(true);
+    try {
+      const scope = 'product.create';
+      await commerceRequest('/owner/products', 'POST', {
+        name: productForm.name.trim(), category: productForm.category,
+        price: Number(productForm.price), stock: Number(productForm.stock),
+        description: productForm.description || 'Freshly stocked at Aquatica Nasugbu.',
+      }, requestKey(scope));
+      await reloadWorkspace('owner');
+      clearRequestKey(scope);
+      setModal(null);
+      setProductForm({ name: '', category: 'Fish', price: '', stock: '', size: '', description: '' });
+      notify('Product added to your catalog.');
+    } catch (error) {
+      clearDefinitiveRequestKey('product.create', error);
+      notify(error.message, () => runOwnerAction(() => saveProduct()));
+    } finally {
+      productSaveLock.current = false;
+      setSavingProduct(false);
+    }
   };
-  const saveStock = async (event) => {
-    event.preventDefault();
+  const saveStock = async () => {
+    if (stockSaveLock.current) return;
     const amount = Number(stockForm.quantity);
     const product = products.find((item) => item.id === stockForm.productId);
     if (!product || !Number.isInteger(amount) || amount <= 0) {
       notify('Choose a product and enter a whole-number quantity greater than zero.');
       return;
     }
-    await commerceRequest('/owner/inventory/movements', 'POST', {
-      productId: product.id,
-      quantity: stockForm.reason === 'Adjustment' ? -amount : amount,
-      type: stockForm.reason === 'Adjustment' ? 'adjustment' : 'restock',
-      reason: stockForm.reason,
-      note: stockForm.note,
-    });
-    await reloadWorkspace('owner');
-    setModal(null);
-    notify(`${product.name} stock updated.`);
+    if (!stockForm.reasonText.trim()) {
+      notify('A reason is required for every stock change.');
+      return;
+    }
+    if (amount >= 50 && !stockForm.confirmLargeChange) {
+      notify('Confirm the large stock change before saving.');
+      return;
+    }
+    stockSaveLock.current = true;
+    setSavingStock(true);
+    try {
+      const scope = 'stock.move';
+      await commerceRequest('/owner/inventory/movements', 'POST', {
+        productId: product.id,
+        quantity: stockForm.reason === 'Adjustment' ? -amount : amount,
+        type: stockForm.reason === 'Adjustment' ? 'adjustment' : 'restock',
+        reason: stockForm.reasonText.trim(),
+        note: stockForm.note,
+        confirmedLargeChange: amount >= 50 ? Boolean(stockForm.confirmLargeChange) : true,
+      }, requestKey(scope));
+      await reloadWorkspace('owner');
+      clearRequestKey(scope);
+      setModal(null);
+      notify(`${product.name} stock updated.`);
+    } catch (error) {
+      clearDefinitiveRequestKey('stock.move', error);
+      notify(error.message, () => runOwnerAction(() => saveStock()));
+    } finally {
+      stockSaveLock.current = false;
+      setSavingStock(false);
+    }
+  };
+  const openProductImage = (product) => {
+    setProductImageFile(null);
+    setModal({ type: 'product-image', product });
+  };
+  const saveProductImage = async () => {
+    if (!modal?.product || !productImageFile) {
+      notify('Choose a JPEG, PNG, or WebP image.');
+      return;
+    }
+    setSavingImage(true);
+    const scope = `product.image.upload.${modal.product.id}`;
+    try {
+      const form = new FormData();
+      form.append('image', productImageFile);
+      await commerceRequest(`/owner/products/${modal.product.id}/image`, 'POST', form, requestKey(scope));
+      await reloadWorkspace('owner');
+      clearRequestKey(scope);
+      setModal(null);
+      setProductImageFile(null);
+      notify('Product image uploaded.');
+    } catch (error) {
+      clearDefinitiveRequestKey(scope, error);
+      notify(error.message);
+    } finally {
+      setSavingImage(false);
+    }
+  };
+  const removeProductImage = async (product) => {
+    const scope = `product.image.remove.${product.id}`;
+    try {
+      await commerceRequest(`/owner/products/${product.id}/image`, 'DELETE', {}, requestKey(scope));
+      await reloadWorkspace('owner');
+      clearRequestKey(scope);
+      setModal(null);
+      notify('Product image removed.');
+    } catch (error) {
+      clearDefinitiveRequestKey(scope, error);
+      notify(error.message);
+    }
   };
   const openStockForm = (product, reason = 'Restock') => {
-    setStockForm({ productId: product?.id || '', quantity: '', reason, note: '' });
+    setStockForm({ productId: product?.id || '', quantity: '', reason, reasonText: '', note: '', confirmLargeChange: false });
     setModal({ type: 'stock' });
   };
   const chooseOrder = (order) => {
@@ -444,7 +632,7 @@ export default function App() {
   let content;
   switch (page) {
     case 'home': content = <HomePage {...pageProps} />; break;
-    case 'shop': content = <ShopPage {...pageProps} products={filteredProducts} cartCount={cartCount} />; break;
+    case 'shop': content = <ShopPage {...pageProps} products={filteredProducts} categories={categories} category={category} setCategory={changeShopCategory} query={query} setQuery={changeShopQuery} cartCount={cartCount} />; break;
     case 'cart': content = <CartPage {...pageProps} />; break;
     case 'checkout': content = <CheckoutPage {...pageProps} onPlaceOrder={placeOrder} />; break;
     case 'payment': content = <PaymentPage order={paymentOrder} settings={settings} proofRef={proofRef} setProofRef={(value) => { setProofRef(value); setProofError(''); }} proofFile={proofFile} onFile={chooseProof} proofError={proofError} onSubmit={submitProof} onNavigate={navigate} onCopy={copyText} />; break;
@@ -455,12 +643,12 @@ export default function App() {
       orders={orders} filter={orderFilter} setFilter={setOrderFilter} query={query} setQuery={setQuery}
       selectedOrderId={activeOrderId} setSelectedOrderId={setActiveOrderId}
       onCheckProof={(order) => openPaymentReview(order, 'preview')}
-      onConfirm={(order) => runOwnerAction(() => confirmOrder(order))}
-      onMarkReady={(order, deliveryBy) => runOwnerAction(() => markOrderReady(order, deliveryBy))}
-      onComplete={(order) => runOwnerAction(() => completeOrder(order))}
+      onConfirm={(order) => runOwnerAction(() => confirmOrder(order), () => confirmOrder(order))}
+      onMarkReady={(order, deliveryBy) => runOwnerAction(() => markOrderReady(order, deliveryBy), () => markOrderReady(order, deliveryBy))}
+      onComplete={(order) => runOwnerAction(() => completeOrder(order), () => completeOrder(order))}
       onCancel={(order) => runOwnerAction(() => { setCancelReason(''); setModal({ type: 'cancel', order }); })}
     />; break;
-    case 'products': content = <ProductsPage products={products} category={category} setCategory={setCategory} query={query} setQuery={setQuery} onAddProduct={() => runOwnerAction(() => setModal({ type: 'product' }))} onStock={(product) => runOwnerAction(() => openStockForm(product))} />; break;
+    case 'products': content = <ProductsPage products={products} category={category} setCategory={setCategory} query={query} setQuery={setQuery} onAddProduct={() => runOwnerAction(() => setModal({ type: 'product' }))} onStock={(product) => runOwnerAction(() => openStockForm(product))} onImage={(product, remove = false) => runOwnerAction(() => remove ? removeProductImage(product) : openProductImage(product))} />; break;
     case 'inventory': content = <InventoryPage products={products} movements={movements} query={query} setQuery={setQuery} onStock={(product, reason) => runOwnerAction(() => openStockForm(product, reason))} />; break;
     case 'customers': content = <CustomersPage customers={customers} query={query} setQuery={setQuery} onToast={notify} />; break;
     case 'reports': content = <ReportsPage products={products} report={report} onToast={notify} />; break;
@@ -484,12 +672,12 @@ export default function App() {
 
   return <div className={`app-shell ${mobileMenu ? 'mobile-nav-open' : ''}`}>
     <Sidebar role={role} page={page} user={user} onNavigate={navigate} cartCount={cartCount} pendingCount={pendingCount} mobileMenu={mobileMenu} onClose={() => setMobileMenu(false)} onLogout={logout} />
-    <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button><div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
-      <div className="topbar-actions"><span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setPage(page === 'notifications' ? (role === 'owner' ? 'dashboard' : 'home') : 'notifications')}><Icon name="bell" size={18} />{unreadNotifications > 0 && <i />}</button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
+    <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button>{['cart', 'checkout', 'payment', 'order-detail', 'notifications', 'account'].includes(page) && <button className="app-back-button" onClick={goBack}><Icon name="back" size={16} /> Back</button>}<div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
+      <div className="topbar-actions"><span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" onClick={() => navigate(page === 'notifications' ? (role === 'owner' ? 'dashboard' : 'home') : 'notifications')}><Icon name="bell" size={18} />{unreadNotifications > 0 && <i />}</button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
     </header><div className="content-area">{selectedProduct ? <ProductDetails product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={addToCart} /> : content}</div>
     <footer className="app-footer"><span>© 2026 Aquatica Nasugbu</span><span>Made for little pieces of the ocean <i>✳</i></span></footer></main>
-    {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}<button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={15} /></button></div>}
-    {modal && <AppModal modal={modal} onClose={() => setModal(null)} onRejectOpen={(order) => openPaymentReview(order, 'reject')} productForm={productForm} setProductForm={setProductForm} stockForm={stockForm} setStockForm={setStockForm} products={products} rejectReason={rejectReason} setRejectReason={setRejectReason} cancelReason={cancelReason} setCancelReason={setCancelReason} onSaveProduct={(event) => { event.preventDefault(); runOwnerAction(() => saveProduct(event)); }} onSaveStock={(event) => { event.preventDefault(); runOwnerAction(() => saveStock(event)); }} onReject={(order) => runOwnerAction(() => rejectPayment(order))} onApprove={(order) => runOwnerAction(() => approvePayment(order))} onCancel={(order) => cancelOrder(order, cancelReason)} />}
+    {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}{toastRetry && <button className="toast-retry" onClick={() => { const retry = toastRetry; setToast(''); setToastRetry(null); retry(); }}>Retry</button>}<button aria-label="Dismiss notification" onClick={() => { setToast(''); setToastRetry(null); }}><Icon name="close" size={15} /></button></div>}
+    {modal && <AppModal modal={modal} onClose={() => setModal(null)} onRejectOpen={(order) => openPaymentReview(order, 'reject')} productForm={productForm} setProductForm={setProductForm} stockForm={stockForm} setStockForm={setStockForm} savingProduct={savingProduct} savingStock={savingStock} productImageFile={productImageFile} setProductImageFile={setProductImageFile} savingImage={savingImage} onSaveProductImage={saveProductImage} onRemoveProductImage={removeProductImage} products={products} rejectReason={rejectReason} setRejectReason={setRejectReason} cancelReason={cancelReason} setCancelReason={setCancelReason} onSaveProduct={(event) => { event.preventDefault(); runOwnerAction(() => saveProduct(), () => saveProduct()); }} onSaveStock={(event) => { event.preventDefault(); runOwnerAction(() => saveStock(), () => saveStock()); }} onReject={(order) => runOwnerAction(() => rejectPayment(order), () => rejectPayment(order))} onApprove={(order) => runOwnerAction(() => approvePayment(order), () => approvePayment(order))} onCancel={(order) => cancelOrder(order, cancelReason)} />}
   </div>;
 }
 
@@ -497,9 +685,9 @@ function ProductDetails({ product, onClose, onAdd }) {
   const [quantity, setQuantity] = useState(1);
   return <div className="product-detail-page"><button className="back-link" onClick={onClose}><Icon name="back" size={16} /> Back to shop</button><div className="product-detail-grid">
     <div className="product-detail-visual"><ProductImage product={product} /><span className="category-pill">{product.category}</span></div>
-    <div className="product-detail-info"><div className="eyebrow">AQUATICA COLLECTION · {product.size}</div><h1>{product.name}</h1><div className="detail-price">{money(product.price)}</div><div className="detail-stock"><span className="stock-dot" /> {product.stock > 0 ? `${product.stock} available` : 'Currently sold out'}</div><p>{product.description}</p><div className="detail-divider" />
+    <div className="product-detail-info"><div className="eyebrow">AQUATICA COLLECTION · {product.size}</div><h1>{product.name}</h1><div className={`detail-stock ${product.stock === 0 ? 'status-sold-out' : ''}`}>{product.stock > 0 ? `${product.stock} available` : '! Sold out'}</div><p>{product.description}</p><div className="detail-divider" />
       <div className="care-note"><span>✳</span><div><b>A little note from us</b><span>Our team carefully checks every order. Send us a message if you need help finding the right fit for your tank.</span></div></div>
-      <div className="detail-buy"><div className="quantity-control"><button aria-label="Decrease quantity" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><span>{quantity}</span><button aria-label="Increase quantity" onClick={() => setQuantity(Math.min(product.stock || 1, quantity + 1))}>+</button></div><Button disabled={!product.stock} onClick={() => { onAdd(product, quantity); onClose(); }}><Icon name="cart" size={17} /> Add to cart · {money(product.price * quantity)}</Button></div>
+      <div className="detail-buy"><div className="quantity-control"><button aria-label="Decrease quantity" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><span>{quantity}</span><button aria-label="Increase quantity" onClick={() => setQuantity(Math.min(product.stock || 1, quantity + 1))}>+</button></div><Button disabled={!product.stock} onClick={async () => { await onAdd(product, quantity); onClose(); }}><Icon name="cart" size={17} /> Add to cart · {money(product.price * quantity)}</Button></div>
     </div>
   </div></div>;
 }
@@ -508,9 +696,9 @@ function Confirmation({ icon, title, text, onOrders, onShop }) {
   return <div className="centered-state"><span className="success-icon"><Icon name={icon} size={24} /></span><div className="eyebrow">AQUATICA NASUGBU</div><h1>{title}</h1><p>{text}</p><div className="centered-actions"><Button onClick={onOrders}>View my orders <Icon name="arrow" size={16} /></Button><button className="text-button" onClick={onShop}>Continue shopping</button></div></div>;
 }
 
-function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, stockForm, setStockForm, products, rejectReason, setRejectReason, cancelReason, setCancelReason, onSaveProduct, onSaveStock, onReject, onApprove, onConfirm, onReceived, onCancel, onStatus }) {
+function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, stockForm, setStockForm, savingProduct, savingStock, productImageFile, setProductImageFile, savingImage, onSaveProductImage, onRemoveProductImage, products, rejectReason, setRejectReason, cancelReason, setCancelReason, onSaveProduct, onSaveStock, onReject, onApprove, onConfirm, onReceived, onCancel, onStatus }) {
   const title = modal.type === 'order' ? `Order ${modal.order.id}` : {
-    product: 'Add a product', stock: stockForm.reason === 'Adjustment' ? 'Adjust stock' : 'Restock product',
+    product: 'Add a product', 'product-image': modal.product?.image ? 'Replace product image' : 'Upload product image', stock: stockForm.reason === 'Adjustment' ? 'Adjust stock' : 'Restock product',
     reject: 'Reject payment proof', proof: 'Payment proof',
     cancel: 'Cancel this order?',
     'cancel-customer': 'Cancel this order?',
@@ -526,15 +714,23 @@ function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, s
       <Field label="Opening stock"><input className="input" required min="0" type="number" value={productForm.stock} onChange={(event) => setProductForm({ ...productForm, stock: event.target.value })} /></Field>
       <Field label="Size or variant"><input className="input" placeholder="e.g. 2.5 in" value={productForm.size} onChange={(event) => setProductForm({ ...productForm, size: event.target.value })} /></Field>
       <Field label="Description" className="field-full"><textarea className="input textarea" value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} /></Field>
-    </div><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit">Add product</Button></div></form>}
+    </div><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" loading={savingProduct}>Add product</Button></div></form>}
+    {modal.type === 'product-image' && <div className="modal-form">
+      <p className="modal-description">{modal.product.name}</p>
+      <Field label="JPEG, PNG, or WebP image"><input className="input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setProductImageFile(event.target.files?.[0] || null)} /></Field>
+      <div className="inline-info"><span className="info-mark">i</span><span>Maximum size 2 MB. The file will be verified and re-encoded on the server.</span></div>
+      <div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>{modal.product.image && <Button type="button" variant="danger-soft" onClick={() => onRemoveProductImage(modal.product)}>Remove image</Button>}<Button type="button" loading={savingImage} onClick={onSaveProductImage}>{modal.product.image ? 'Replace image' : 'Upload image'}</Button></div>
+    </div>}
     {modal.type === 'stock' && <form className="modal-form" onSubmit={onSaveStock}>
       <Field label="Product"><select className="input" required value={stockForm.productId} onChange={(event) => setStockForm({ ...stockForm, productId: event.target.value })}><option value="">Choose a product</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.stock} in stock</option>)}</select></Field>
       <div className="form-grid"><Field label="Movement"><select className="input" value={stockForm.reason} onChange={(event) => setStockForm({ ...stockForm, reason: event.target.value })}><option>Restock</option><option>Adjustment</option></select></Field><Field label={stockForm.reason === 'Adjustment' ? 'Units to remove' : 'Units to add'}><input className="input" type="number" min="1" required value={stockForm.quantity} onChange={(event) => setStockForm({ ...stockForm, quantity: event.target.value })} /></Field></div>
-      <Field label="Reason or note (optional)"><input className="input" placeholder="e.g. Supplier delivery" value={stockForm.note} onChange={(event) => setStockForm({ ...stockForm, note: event.target.value })} /></Field>
-      <div className="inline-info"><span className="info-mark">i</span><span>This change will be added to your stock movement history.</span></div><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit">Save movement</Button></div>
+      <Field label="Reason"><input className="input" required placeholder="e.g. Supplier delivery" value={stockForm.reasonText} onChange={(event) => setStockForm({ ...stockForm, reasonText: event.target.value })} /></Field>
+      <Field label="Note (optional)"><input className="input" value={stockForm.note} onChange={(event) => setStockForm({ ...stockForm, note: event.target.value })} /></Field>
+      {Number(stockForm.quantity) >= 50 && <label className="field"><span>Large-change confirmation</span><input type="checkbox" checked={stockForm.confirmLargeChange} onChange={(event) => setStockForm({ ...stockForm, confirmLargeChange: event.target.checked })} /> Confirm this change is 50 units or more.</label>}
+      <div className="inline-info"><span className="info-mark">i</span><span>This change will be added to your stock movement history.</span></div><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" loading={savingStock}>Save movement</Button></div>
     </form>}
     {modal.type === 'reject' && <div className="modal-form"><p className="modal-description">Let {modal.order.customer} know what needs to be corrected. They can submit new payment proof once you reject this one.</p><Field label="Reason for rejection"><textarea className="input textarea" autoFocus placeholder="e.g. The amount on the screenshot doesn't match the order total." value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} /></Field><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Go back</Button><Button variant="danger" disabled={!rejectReason.trim()} onClick={() => onReject(modal.order)}>Reject payment proof</Button></div></div>}
     {modal.type === 'proof' && <div className="proof-modal-content"><div className="receipt-large proof-receipt">{modal.order.proofImageUrl ? <img className="proof-image" src={commercePath(modal.order.proofImageUrl)} alt={`Payment screenshot for ${modal.order.id}`} /> : <span>No payment screenshot is attached.</span>}</div><div className="proof-modal-info"><span className="eyebrow">CUSTOMER SUBMISSION</span><h3>{modal.order.customer}</h3><p>{modal.order.proofName || 'No screenshot attached'}</p><div className="detail-info-row"><span>Amount due</span><b>{money(modal.order.total)}</b></div><div className="detail-info-row"><span>GCash reference</span><b>{modal.order.reference || '—'}</b></div>{modal.order.paymentStatus === 'Under review' && <div className="verification-actions"><Button variant="danger-soft" onClick={() => onRejectOpen(modal.order)}>Reject</Button><Button onClick={() => onApprove(modal.order)}><Icon name="check" size={16} /> Approve</Button></div>}</div></div>}
-    {modal.type === 'order' && <div className="owner-order-detail"><div className="owner-order-columns"><section className="detail-main"><div className="detail-status"><span>Order status</span><span className="status-label">{modal.order.status}</span><div className="step-track"><span className="step-done">Placed</span><i /><span>{modal.order.delivery === 'Pickup' ? 'Ready' : 'Preparing'}</span><i /><span>Completed</span></div></div><div className="detail-block"><h3>Items ordered</h3>{modal.order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.name} <i>× {item.quantity}</i></span><b>{money(item.price * item.quantity)}</b></div>)}</div><div className="detail-block"><h3>Customer details</h3><div className="detail-info-row"><span>Customer</span><b>{modal.order.customer}</b></div><div className="detail-info-row"><span>Phone</span><b>{modal.order.phone}</b></div><div className="detail-info-row"><span>{modal.order.delivery}</span><b>{modal.order.address}</b></div></div></section><aside className="owner-order-side"><div className="panel owner-summary"><h3>Payment summary</h3><div className="detail-info-row"><span>Total</span><b>{money(modal.order.total)}</b></div><div className="detail-info-row"><span>Method</span><b>{modal.order.method}</b></div><div className="detail-info-row"><span>Payment status</span><b>{modal.order.paymentStatus}</b></div></div><div className="owner-order-actions"><h3>Next step</h3>{modal.order.status === 'Pending' && modal.order.method !== 'GCash' && <Button className="button-full" onClick={() => onConfirm(modal.order)}>Confirm & deduct stock</Button>}{modal.order.method === 'GCash' && modal.order.paymentStatus === 'Under review' && <Button className="button-full" onClick={() => onApprove(modal.order)}>Approve payment</Button>}{modal.order.status === 'Preparing' && <Button variant="secondary" className="button-full" onClick={() => onStatus(modal.order, 'Ready')}>Mark as ready</Button>}{['Preparing', 'Ready'].includes(modal.order.status) && modal.order.paymentStatus !== 'Paid' && <Button className="button-full" onClick={() => onReceived(modal.order)}>Mark payment received</Button>}{['Preparing', 'Ready'].includes(modal.order.status) && modal.order.paymentStatus === 'Paid' && <Button className="button-full" onClick={() => onStatus(modal.order, 'Completed')}>Mark completed</Button>}{!['Completed', 'Cancelled'].includes(modal.order.status) && <Button variant="danger-soft" className="button-full" onClick={() => onRejectOpen({ ...modal.order, __cancel: true })}>Cancel order</Button>}</div></aside></div></div>}
+    {modal.type === 'order' && <div className="owner-order-detail"><div className="owner-order-columns"><section className="detail-main"><div className="detail-status"><span>Order status</span><span className="status-label">{modal.order.statusLabel || modal.order.status}</span><div className="step-track"><span className="step-done">Placed</span><i /><span>{modal.order.delivery === 'Pickup' ? 'Ready for pickup' : 'Preparing'}</span><i /><span>{modal.order.delivery === 'Pickup' ? 'Picked up' : 'Delivered'}</span></div></div><div className="detail-block"><h3>Items ordered</h3>{modal.order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.name} <i>× {item.quantity}</i></span><b>{money(item.price * item.quantity)}</b></div>)}</div><div className="detail-block"><h3>Customer details</h3><div className="detail-info-row"><span>Customer</span><b>{modal.order.customer}</b></div><div className="detail-info-row"><span>Phone</span><b>{modal.order.phone}</b></div><div className="detail-info-row"><span>{modal.order.delivery === 'Delivery' ? 'Delivery address' : 'Pickup location'}</span><b>{modal.order.delivery === 'Delivery' ? modal.order.address : modal.order.pickupLocation}</b></div></div></section><aside className="owner-order-side"><div className="panel owner-summary"><h3>Payment summary</h3><div className="detail-info-row"><span>Total</span><b>{money(modal.order.total)}</b></div><div className="detail-info-row"><span>Method</span><b>{modal.order.method}</b></div><div className="detail-info-row"><span>Payment status</span><b>{modal.order.paymentStatus}</b></div></div><div className="owner-order-actions"><h3>Next step</h3>{modal.order.status === 'Pending' && modal.order.method !== 'GCash' && <Button className="button-full" onClick={() => onConfirm(modal.order)}>Confirm & deduct stock</Button>}{modal.order.method === 'GCash' && modal.order.paymentStatus === 'Under review' && <Button className="button-full" onClick={() => onApprove(modal.order)}>Approve payment</Button>}{modal.order.status === 'Preparing' && <Button variant="secondary" className="button-full" onClick={() => onStatus(modal.order, 'Ready')}>Mark as ready</Button>}{['Preparing', 'Ready'].includes(modal.order.status) && modal.order.paymentStatus !== 'Paid' && <Button className="button-full" onClick={() => onReceived(modal.order)}>Mark payment received</Button>}{['Preparing', 'Ready'].includes(modal.order.status) && modal.order.paymentStatus === 'Paid' && <Button className="button-full" onClick={() => onStatus(modal.order, 'Completed')}>Mark completed</Button>}{!['Completed', 'Cancelled'].includes(modal.order.status) && <Button variant="danger-soft" className="button-full" onClick={() => onRejectOpen({ ...modal.order, __cancel: true })}>Cancel order</Button>}</div></aside></div></div>}
   </Modal>;
 }

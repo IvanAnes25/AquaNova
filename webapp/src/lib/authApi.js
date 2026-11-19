@@ -1,5 +1,13 @@
 let csrfToken = '';
 
+export class ApiRequestError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
 function endpoint(path) {
   const projectBase = window.location.pathname.replace(/\/webapp\/?$/, '').replace(/\/+$/, '');
   return `${projectBase}${path}`;
@@ -25,10 +33,10 @@ async function readResponse(response) {
   try {
     result = await response.json();
   } catch {
-    throw new Error('The authentication server returned an invalid response.');
+    throw new ApiRequestError('The authentication server returned an invalid response.', response.status);
   }
   if (result.csrfToken) csrfToken = result.csrfToken;
-  if (!response.ok) throw new Error(result.message || 'The request could not be completed.');
+  if (!response.ok) throw new ApiRequestError(result.message || 'The request could not be completed.', response.status);
   return result;
 }
 
@@ -45,7 +53,7 @@ export async function authPost(path, values = {}) {
   return authRequest(path, 'POST', values);
 }
 
-export async function authRequest(path, method, values = {}) {
+export async function authRequest(path, method, values = {}, extraHeaders = {}) {
   if (!csrfToken) {
     const csrf = await authGet('/api/auth/csrf.php');
     csrfToken = csrf.csrfToken;
@@ -58,6 +66,7 @@ export async function authRequest(path, method, values = {}) {
       Accept: 'application/json',
       'X-CSRF-Token': csrfToken,
       ...(!isForm ? { 'Content-Type': 'application/json' } : {}),
+      ...extraHeaders,
     },
     body: isForm ? values : JSON.stringify(values),
   });

@@ -26,9 +26,21 @@ try {
     $migrationDefinition['up']($pdo);
     $migration->execute(['migration' => '20261111_commerce']);
     $assert((int) $migration->fetchColumn() === 1, 'Re-running the migration changed its applied state.');
+    $idempotencyMigration = require dirname(__DIR__) . '/database/migrations/20261118_idempotency_requests.php';
+    $idempotencyMigration['up']($pdo);
+    $migration->execute(['migration' => '20261118_idempotency_requests']);
+    $assert((int) $migration->fetchColumn() === 1, 'Idempotency migration is not recorded as applied.');
+    $idempotencyReplayMigration = require dirname(__DIR__) . '/database/migrations/20261119_idempotency_replay.php';
+    $idempotencyReplayMigration['up']($pdo);
+    $migration->execute(['migration' => '20261119_idempotency_replay']);
+    $assert((int) $migration->fetchColumn() === 1, 'Idempotency replay migration is not recorded as applied.');
+    $stockImageMigration = require dirname(__DIR__) . '/database/migrations/20261120_stock_reason_image_archive.php';
+    $stockImageMigration['up']($pdo);
+    $migration->execute(['migration' => '20261120_stock_reason_image_archive']);
+    $assert((int) $migration->fetchColumn() === 1, 'Stock reason and product image migration is not recorded as applied.');
 
     $requiredTables = [
-        'categories', 'addresses', 'cart_items', 'payment_proofs', 'notifications',
+        'categories', 'addresses', 'cart_items', 'payment_proofs', 'notifications', 'idempotency_requests', 'stock_change_archives',
         'audit_log', 'order_status_history',
     ];
     foreach ($requiredTables as $table) {
@@ -50,6 +62,10 @@ try {
         ],
         'order_items' => ['name_snapshot', 'price_snapshot', 'qty'],
         'stock_movements' => ['change_qty', 'type', 'reason', 'order_id', 'user_id'],
+        'idempotency_requests' => [
+            'user_id', 'scope', 'endpoint', 'request_hash', 'payload_hash',
+            'response_status', 'response_body', 'state', 'expires_at', 'completed_at',
+        ],
     ];
     foreach ($requiredColumns as $table => $columns) {
         foreach ($columns as $column) {

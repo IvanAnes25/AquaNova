@@ -44,11 +44,19 @@ export default function OrdersPage({
     const search = query.trim().toLowerCase();
     return orders
       .filter((order) => !search || `${order.id} ${order.customer} ${order.items.map((item) => item.name).join(' ')}`.toLowerCase().includes(search))
-      .sort((left, right) => createdAt(left) - createdAt(right));
+      .sort((left, right) => createdAt(right) - createdAt(left));
   }, [orders, query]);
   const activeTab = orderTabs.find((tab) => tab.label === filter) || orderTabs[0];
   const visibleOrders = sortedOrders.filter(activeTab.matches);
   const selectedOrder = visibleOrders.find((order) => order.id === selectedOrderId) || null;
+  const nextOrder = () => {
+    const currentIndex = visibleOrders.findIndex((order) => order.id === selectedOrderId);
+    const following = visibleOrders.slice(currentIndex + 1).find(hasNextAction)
+      || visibleOrders.find(hasNextAction)
+      || visibleOrders.slice(currentIndex + 1)[0]
+      || visibleOrders[0];
+    if (following) setSelectedOrderId(following.id);
+  };
 
   useEffect(() => {
     if (!selectedOrder) {
@@ -66,7 +74,7 @@ export default function OrdersPage({
   };
 
   return <>
-    <SectionTitle eyebrow="SHOP MANAGEMENT" title="Orders" />
+    <SectionTitle eyebrow="SHOP MANAGEMENT" title="Orders" action={<Button variant="secondary" disabled={!visibleOrders.length} onClick={nextOrder}>Next order</Button>} />
     <div className="orders-toolbar">
       <div className="category-tabs order-tabs" role="tablist" aria-label="Order status">
         {orderTabs.map((tab) => {
@@ -88,8 +96,8 @@ export default function OrdersPage({
         </button>) : <div className="order-inbox-empty">No orders in this tab.</div>}
       </section>
       {selectedOrder ? <section className="panel order-inbox-detail" aria-label={`Order ${selectedOrder.id} details`}>
-        <div className="order-detail-heading"><div><span className="eyebrow">{selectedOrder.date}</span><h2>{selectedOrder.id}</h2></div><Status>{selectedOrder.status}</Status></div>
-        <div className="order-detail-customer"><b>{selectedOrder.customer}</b><span>{selectedOrder.phone}</span><span>{selectedOrder.delivery} · {selectedOrder.address}</span></div>
+        <div className="order-detail-heading"><div><span className="eyebrow">{selectedOrder.date}</span><h2>{selectedOrder.id}</h2></div><Status>{selectedOrder.statusLabel || selectedOrder.status}</Status></div>
+        <div className="order-detail-customer"><b>{selectedOrder.customer}</b><span>{selectedOrder.phone}</span><span>{selectedOrder.delivery} · {selectedOrder.delivery === 'Pickup' ? selectedOrder.pickupLocation : selectedOrder.address}</span></div>
         <div className="order-detail-items"><h3>Items</h3>{selectedOrder.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.name} <i>× {item.quantity}</i></span><b>{money(item.price * item.quantity)}</b></div>)}</div>
         <div className="order-detail-payment"><div><span>Payment method</span><b>{selectedOrder.method}</b></div><div><span>Payment status</span><Status>{selectedOrder.paymentStatus}</Status></div>{selectedOrder.method === 'GCash' && selectedOrder.reference && <div><span>Reference</span><b>{selectedOrder.reference}</b></div>}{selectedOrder.proofReason && <p className="reject-note">Proof rejected: {selectedOrder.proofReason}</p>}</div>
         {action && <div className="order-inbox-actions">
@@ -97,7 +105,7 @@ export default function OrdersPage({
           <Button className="button-full" disabled={action.disabled} onClick={runAction}>{action.label}{action.action === 'proof' && <Icon name="arrow" size={16} />}</Button>
           {!['Completed', 'Cancelled'].includes(selectedOrder.status) && <Button variant="danger-soft" className="button-full" onClick={() => onCancel(selectedOrder)}>Cancel order</Button>}
         </div>}
-      </section> : <section className="panel order-inbox-placeholder"><EmptyState title={query ? 'No matching orders' : 'No orders here'} text={query ? 'Try another order number or customer name.' : 'Orders in this status will appear here.'} /></section>}
+      </section> : <section className="panel order-inbox-placeholder"><EmptyState title={filter === 'Needs action' && !query ? 'All caught up' : query ? 'No matching orders' : 'No orders here'} text={query ? 'Try another order number or customer name.' : filter === 'Needs action' ? 'New orders that need attention will appear here.' : 'Orders in this status will appear here.'} /></section>}
     </div>
   </>;
 }

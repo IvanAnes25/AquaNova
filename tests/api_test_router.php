@@ -18,6 +18,16 @@ if (($config['environment'] ?? '') !== 'local'
 $projectPath = '/' . basename($projectRoot);
 $apiPath = $projectPath . '/api/v1';
 $requestPath = rawurldecode((string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH));
+if ($requestPath === $projectPath . '/api/test/smtp-config') {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'mailHost' => getenv('AQUATICA_TEST_MAIL_HOST') ?: '',
+        'mailPort' => getenv('AQUATICA_TEST_MAIL_PORT') ?: '',
+        'isolatedDatabase' => $databaseName,
+        'databaseConfigured' => $configuredDatabaseName === $databaseName,
+    ]);
+    return true;
+}
 if ($requestPath === $apiPath || str_starts_with($requestPath, $apiPath . '/')) {
     $route = trim(substr($requestPath, strlen($apiPath)), '/');
     if (str_contains($route, '..') || str_contains($route, '\\')) {
@@ -83,6 +93,9 @@ if ($requestPath === $webappPath || str_starts_with($requestPath, $webappPath . 
     ];
     $extension = strtolower(pathinfo($file, PATHINFO_EXTENSION));
     header('Content-Type: ' . ($contentTypes[$extension] ?? 'application/octet-stream'));
+    if ($relativePath === 'index.html') {
+        header('Cache-Control: no-store, private');
+    }
     readfile($file);
     return true;
 }

@@ -17,7 +17,20 @@ if (!in_array($direction, ['up', 'down'], true)) {
 
 try {
     $pdo = database_connection();
-    $migration = require dirname(__DIR__) . '/database/migrations/20261111_commerce.php';
+    $migrationFiles = glob(dirname(__DIR__) . '/database/migrations/[0-9]*_*.php') ?: [];
+    sort($migrationFiles, SORT_STRING);
+    $migrations = [];
+    foreach ($migrationFiles as $migrationFile) {
+        if (preg_match('/^\d{8}_[a-z0-9_]+\.php$/', basename($migrationFile)) !== 1) {
+            continue;
+        }
+        $migration = require $migrationFile;
+        if (!is_array($migration) || !isset($migration['name'], $migration['up'], $migration['down'])
+            || !is_callable($migration['up']) || !is_callable($migration['down'])) {
+            throw new RuntimeException('Invalid migration definition: ' . basename($migrationFile));
+        }
+        $migrations[] = $migration;
+    }
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS schema_migrations (
             migration VARCHAR(120) NOT NULL PRIMARY KEY,
@@ -26,28 +39,31 @@ try {
     );
 
     $find = $pdo->prepare('SELECT COUNT(*) FROM schema_migrations WHERE migration = :migration');
-    $find->execute(['migration' => $migration['name']]);
-    $isApplied = (int) $find->fetchColumn() > 0;
-
-    if ($direction === 'up' && $isApplied) {
-        fwrite(STDOUT, "Migration {$migration['name']} is already applied.\n");
-        exit(0);
-    }
-    if ($direction === 'down' && !$isApplied) {
-        fwrite(STDOUT, "Migration {$migration['name']} is not applied.\n");
-        exit(0);
-    }
-
-    $migration[$direction]($pdo);
+    $record = $pdo->prepare('INSERT INTO schema_migrations (migration) VALUES (:migration)');
+    $remove = $pdo->prepare('DELETE FROM schema_migrations WHERE migration = :migration');
     if ($direction === 'up') {
-        $record = $pdo->prepare('INSERT INTO schema_migrations (migration) VALUES (:migration)');
-        $record->execute(['migration' => $migration['name']]);
+        foreach ($migrations as $migration) {
+            $find->execute(['migration' => $migration['name']]);
+            if ((int) $find->fetchColumn() > 0) {
+                fwrite(STDOUT, "Migration {$migration['name']} is already applied.\n");
+                continue;
+            }
+            $migration['up']($pdo);
+            $record->execute(['migration' => $migration['name']]);
+            fwrite(STDOUT, "Migration {$migration['name']} up completed.\n");
+        }
     } else {
-        $remove = $pdo->prepare('DELETE FROM schema_migrations WHERE migration = :migration');
-        $remove->execute(['migration' => $migration['name']]);
+        foreach (array_reverse($migrations) as $migration) {
+            $find->execute(['migration' => $migration['name']]);
+            if ((int) $find->fetchColumn() === 0) {
+                continue;
+            }
+            $migration['down']($pdo);
+            $remove->execute(['migration' => $migration['name']]);
+            fwrite(STDOUT, "Migration {$migration['name']} down completed.\n");
+            break;
+        }
     }
-
-    fwrite(STDOUT, "Migration {$migration['name']} {$direction} completed.\n");
 } catch (Throwable $exception) {
     fwrite(STDERR, "Migration failed: {$exception->getMessage()}\n");
     exit(1);

@@ -16,6 +16,9 @@ try {
         $controller->catalog();
     } elseif ($segments === ['catalog', 'categories'] && $method === 'GET') {
         $controller->categories();
+    } elseif (count($segments) === 4 && $segments[0] === 'catalog' && $segments[1] === 'products'
+        && $segments[3] === 'image' && $method === 'GET') {
+        $controller->productImage($segments[2]);
     } elseif ($segments === ['settings', 'public'] && $method === 'GET') {
         $controller->publicSettings();
     } elseif ($segments === ['settings', 'gcash-qr'] && $method === 'GET') {
@@ -71,6 +74,16 @@ try {
     } elseif (count($segments) === 3 && $segments[0] === 'owner' && $segments[1] === 'products'
         && ctype_digit($segments[2]) && $method === 'PATCH') {
         $controller->updateProduct((int) $segments[2]);
+    } elseif (count($segments) === 4 && $segments[0] === 'owner' && $segments[1] === 'products'
+        && $segments[3] === 'image'
+        && in_array($method, ['GET', 'POST', 'DELETE'], true)) {
+        if ($method === 'GET') {
+            $controller->productImage($segments[2]);
+        } elseif ($method === 'DELETE') {
+            $controller->removeProductImage($segments[2]);
+        } else {
+            $controller->uploadProductImage($segments[2]);
+        }
     } elseif ($segments === ['owner', 'inventory'] && $method === 'GET') {
         $controller->inventory();
     } elseif ($segments === ['owner', 'inventory', 'movements'] && $method === 'POST') {

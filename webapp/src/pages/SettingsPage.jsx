@@ -1,16 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Field, SectionTitle } from '../components/UI.jsx';
 import { commercePath } from '../lib/commerceApi.js';
 
 export default function SettingsPage({ settings, onSave }) {
   const [values, setValues] = useState(settings);
   const [qrFile, setQrFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const savingLock = useRef(false);
   useEffect(() => setValues(settings), [settings]);
   const update = (key, value) => setValues((current) => ({ ...current, [key]: value }));
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
-    onSave({
+    if (savingLock.current) return;
+    savingLock.current = true;
+    setSaving(true);
+    try {
+      await onSave({
       shopName: values.shopName,
       shopPhone: values.shopPhone,
       shopAddress: values.shopAddress,
@@ -24,7 +30,11 @@ export default function SettingsPage({ settings, onSave }) {
       autoCancelHours: values.autoCancelHours === '' || values.autoCancelHours == null
         ? null
         : Number(values.autoCancelHours),
-    }, qrFile);
+      }, qrFile);
+    } finally {
+      savingLock.current = false;
+      setSaving(false);
+    }
   }
 
   return <>
@@ -53,7 +63,7 @@ export default function SettingsPage({ settings, onSave }) {
             <span className="field-hint">{values.gcashReady ? 'GCash checkout is enabled.' : 'GCash checkout remains unavailable until recipient name, number, and QR are configured.'}</span>
           </Field>
         </div>
-        <div className="settings-actions"><Button type="submit">Save changes</Button></div>
+        <div className="settings-actions"><Button type="submit" loading={saving}>Save changes</Button></div>
       </form>
     </div>
   </>;

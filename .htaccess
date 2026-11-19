@@ -2,6 +2,9 @@ DirectoryIndex index.php
 Options -Indexes
 
 <IfModule mod_headers.c>
+    <FilesMatch "^index\.html$">
+        Header always set Cache-Control "no-store, private"
+    </FilesMatch>
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "DENY"
     Header always set Referrer-Policy "strict-origin-when-cross-origin"

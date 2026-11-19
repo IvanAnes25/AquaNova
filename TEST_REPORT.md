@@ -1,8 +1,69 @@
-# Aquatica closeout test report — 2026-11-14
+# Aquatica implementation test report — 2026-11-18
 
 ## Release status
 
-**NOT READY FOR HOSTING.** The final isolated rerun passed 238 backend assertions, all 10 live-data Playwright tests, and both production builds. Temporary test records and helper files were removed. Actual 150%/200% owner-page zoom and valid Lighthouse navigation scores for Orders and Reports remain unverified; production-host checks also remain.
+**NOT DONE — not ready for hosting.** This implementation is partial. The 2026-11-14 release run below is historical and does not validate the current changes. The short-stock Playwright regression is now passing, but several requested features and release checks remain incomplete; see “Current change verification” and the remaining list below.
+
+## Current change verification — 2026-11-18
+
+All database-backed commands below explicitly set both `DB_NAME` and `AQUATICA_TEST_DB_NAME` to `aquanova_test_20261114_074204_c39ae8`, with `APP_ENV=local`. The configured `aquanova` database was not used. Migrations `20261118_idempotency_requests` and `20261119_idempotency_replay` were applied only to that isolated database. An existing pre-change test database backup is at the session files location; no production database was backed up, queried, or migrated.
+
+| Command/check | Actual result |
+|---|---|
+| `php scripts\migrate.php up` | PASS — existing migrations were confirmed and `20261120_stock_reason_image_archive up completed.` The pickup wording migration previously reported 0 matching rows before and 0 after. |
+| `php tests\fulfillment_wording_test.php` | PASS — `Fulfillment wording tests passed (40 assertions).` |
+| `php tests\commerce_schema_test.php` | PASS — `Commerce schema tests passed (64 assertions).` |
+| `php tests\commerce_auto_cancel_test.php` | PASS — `Commerce auto-cancel tests passed (25 assertions).` |
+| `php tests\commerce_reports_test.php` | PASS — `Commerce reports tests passed (36 assertions).` |
+| `php tests\commerce_api_security_test.php` with the isolated test router | PASS — `Commerce API security tests passed (144 assertions).` The run passed replay, payload mismatch, user scoping, parallel order and product races, 4xx/5xx key handling, stock reasons/archive, product-image security, randomized stock invariants, and named security cases. |
+| `php tests\auth_registration_verification_test.php` with `AQUATICA_TEST_MAIL_HOST=127.0.0.1` and port `2526` | PASS — 3 consecutive runs passed, each reporting `Registration and email verification passed (SMTP catcher, code verification, customer-only role; 9 assertions).` |
+| `npx playwright test -g "short stock" --trace on --workers=1 --repeat-each=3 --reporter=line` | PASS — exact summary: `3 passed (56.8s)`. This includes the UI quantity reduction after stock rejection and successful order recovery. |
+| `npm run test:e2e` | PASS — exact summary: `13 passed (1.3m)`. This includes stock reason/image management, double-click order placement, and dropped-response retry. |
+| `npm run build` | PASS — final root and webapp Vite production builds completed. |
+| Targeted category URL rerun | PASS — shop category chips remained visible and URL restore behavior passed. |
+| `php -l` on changed PHP files and PHP test/router files | PASS — no syntax errors. |
+| `git diff --check` | PASS — final edits checked. |
+| Forgot-password link contrast | Measured `#155e75` on white: 7.27:1; hover `#164e63` on white: 9.11:1. Both exceed WCAG AA. |
+
+PHP CLI reports `Module "mysqli" is already loaded`; the warning did not fail the passing commands. Playwright generated temporary output; tracked baseline screenshots were restored afterward.
+
+### Short-stock regression diagnosis
+
+The original timeout trace showed the customer already on “Order placed!”, and recorded repeated calls to `placeOrder` from React's state-update path after the expected stock error. `notify()` passed the retry function directly to `setToastRetry`; React interpreted the function as a state updater and executed it (repeatedly in Strict Mode), which could submit another order after the stock error and empty the cart. Temporarily reverting the submission lock did not make the original test pass: it failed at the same “Continue to checkout” locator, confirming the lock was not the root cause. Wrapping the stored retry callback in an updater (`setToastRetry(() => retry)`) prevents accidental invocation; the lock still guards concurrent submits and failed attempts still clear their idempotency key.
+
+The recovery assertion now decreases quantity through the UI, confirms checkout is enabled within 9 seconds, places the corrected order, and checks its one-item quantity. The shared order helper and owner-cancellation assertion also use bounded 9-second waits for the expected UI/database state.
+
+### Idempotency replay verification
+
+Before this change, the migration stored only key metadata and duplicate claims returned `409`. The controller now stores canonical payload and endpoint hashes, original status/body, completion state, and a 24-hour expiry. Completed same-payload requests replay their response with `Idempotent-Replay: true`; differing payloads or endpoints return `422`; concurrent in-progress claims return `409` with `Retry-After: 1`; 5xx responses release the key.
+
+The replay behavior covers order creation, customer cancellation, GCash proof submission, owner order actions, product creation, stock movement, product-image upload, and product-image removal. PHP coverage passed 144 assertions, including replay, payload mismatch, parallel order creation, cross-user key isolation, definitive 4xx handling, 5xx release, stock archives, and image security. Playwright passed 13 tests, including stock/image management, double-click order placement, and an aborted/dropped response retried with the same key.
+
+### Registration SMTP regression diagnosis
+
+The auth suite initially failed when the API server was already running without `AQUATICA_TEST_MAIL_HOST` and `AQUATICA_TEST_MAIL_PORT`; the registration endpoint therefore used private mail settings instead of the suite's local catcher. With both variables inherited by the API server, the suite passed 3 consecutive runs. Reverting the replay change was unnecessary because the replay hook is confined to mutating commerce requests and the auth endpoint was never replayed; the regression was server environment propagation, not application replay handling.
+
+No application code or login behavior was changed for this regression diagnosis.
+
+### Stock and product-image batch
+
+The workspace name-level requirements covered by this batch are “stock reasons and large-change archive” and “product image upload, replace and remove.” The original numbered requirement text and item numbers were not available in the current workspace documents, so implementation follows the explicit task text: reasons are required, 50-unit-or-larger changes require confirmation and are archived, stock cannot go below zero, and product images are verified JPEG/PNG/WebP files limited to 2 MB.
+
+PHP verification passed 144 assertions including owner-only image endpoints, customer denial, renamed PHP and appended-payload rejection, wrong content type, oversize rejection, replacement cleanup, removal cleanup, reason validation, large-change confirmation, archive creation, and randomized stock/log consistency. Playwright passed the owner stock reason/history flow and upload/replace/remove flow with database verification.
+
+The registration suite uses only disposable `registration-*@example.test` addresses and sends mail only to the local SMTP catcher in 3/3 passing runs. I cannot prove whether the earlier failed registration run sent any real email outside the configured mail route; no outbound message audit was available. It was not sent to a production recipient, and the final configuration was explicitly limited to `127.0.0.1:2526`.
+
+### Scope still incomplete
+
+- Item 1: the pickup/delivery wording fixes and matrix exist, but no packing-slip or order-email renderer was found, and the migration's current 0→0 count does not demonstrate rewriting a matching live test notification.
+- Item 2: not every action has a loading/retry state or a double-click Playwright assertion. Idempotency replay is implemented and covered; remaining action-level loading/retry UX coverage is incomplete.
+- Item 3: navigation/back handling is partial; dedicated login/back/logout and deep-link/back tests are not done.
+- Item 6: first-login password feedback was added; a normal owner password-change flow is not available in the existing backend, and backend behavior was not changed.
+- Item 7: next-order affordance/selection is partial; full GCash/COD/pickup flow verification is not complete.
+- Remaining Items 8–12 and 14: shop hours, notification grouping/read-delete, and walk-in sales are not implemented. Stock reasons/large-change archive and product image upload/replace/remove are implemented and tested in this batch.
+- Item 13: show/hide controls and login-link contrast were updated; full keyboard/screen-reader and page-leave checks are not done.
+- Item 15: the required 360/390/412/768/1024/1440 matrix, actual 150%/200% zoom screenshots, and valid Lighthouse navigation audits are not done.
+- `TEST_REPORT.md`, `API.md`, and `OWNER_GUIDE.md` were updated to distinguish implemented behavior from incomplete scope; documentation does not replace the missing implementation and validation.
 
 All mutating backend suites in this report used the isolated database `aquanova_test_20261114_074204_c39ae8`. The configured `aquanova` database was not used for test mutations.
 
@@ -10,12 +71,12 @@ All mutating backend suites in this report used the isolated database `aquanova_
 
 | Area | Status | Evidence and remaining gap |
 |---|---|---|
-| (b) Authentication and roles | PASS (isolated local test) | Registration and email verification passed through the local SMTP catcher (8 assertions). Supplying `owner` as the requested role still created a customer. This does not verify production SMTP or deployment. |
+| (b) Authentication and roles | PASS (isolated local test) | Registration and email verification passed 3 consecutive times through the local SMTP catcher (9 assertions each). Login behavior was not changed. |
 | (c) Catalog and cart | PASS (isolated live API) | Playwright uses the real PHP API and isolated database; the customer cart survives refresh. |
-| (d) Orders and checkout | PASS (isolated live API) | Live browser flows cover short stock, both cancellation paths and stock return, COD delivery, pickup cash, and paid completion actions; database status, stock, and stock-log records are checked. |
+| (d) Orders and checkout | PARTIAL (isolated live API) | The short-stock/cancellation Playwright flow passes, including 3/3 focused runs and the 13/13 full suite. A real remaining gap is full COD/GCash/pickup flow verification per item 7. |
 | (e) GCash proof payment | PASS (isolated live API) | Live browser flow covers rejection with reason, duplicate-reference rejection, re-upload, approval, stock deducted once, next-order selection, Ready, and Completed. |
 | (f) Owner Orders inbox | PASS (isolated live API) | Real-data browser flows cover the order tabs, actions, and automatic next-order selection. Responsive rendering passes at tested widths. |
-| (g) Inventory | PASS (isolated API) | Randomized stock-to-log invariant passed across checkout, GCash approval, cash confirmation, cancellation, restock, and adjustment; it also asserts stock never goes below zero. |
+| (g) Inventory | PASS (isolated API) | Stock changes require reasons, changes of 50 units or more require confirmation and write an archive, and randomized stock-to-log invariant passed. Owner Playwright coverage uploads, replaces, and removes a product image. |
 | (h) Reports | PASS (isolated live API) | Reports rendered in Playwright from live test orders and were checked against the database-backed API response. Backend report formulas pass the dedicated suite. |
 | (i) Settings | PASS (local API coverage) | Field validation, PATCH compatibility, payment availability, audit records, delivery-fee snapshots, verified QR upload, and authorized QR reads pass. Hosting-specific upload behavior remains unverified. |
 | (j) Notifications | PASS (isolated live API) | The browser flow verifies notifications for the exercised order/proof events occur once; XSS product text renders as text. |
@@ -26,14 +87,14 @@ All mutating backend suites in this report used the isolated database `aquanova_
 
 | Validation | Result |
 |---|---|
-| `php tests\commerce_schema_test.php` | PASS — `Commerce schema tests passed (49 assertions).` |
+| `php tests\commerce_schema_test.php` | PASS — `Commerce schema tests passed (64 assertions).` |
 | `php tests\commerce_auto_cancel_test.php` | PASS — `Commerce auto-cancel tests passed (25 assertions).` |
 | `php tests\commerce_reports_test.php` | PASS — `Commerce reports tests passed (36 assertions).` |
-| `php -d extension=gd tests\commerce_api_security_test.php` | PASS — `Commerce API security tests passed (120 assertions).` Rerun random-invariant seed: `2818179`. Ran against the isolated PHP test router/database. |
-| `php tests\auth_registration_verification_test.php` | PASS — `Registration and email verification passed (SMTP catcher, code verification, customer-only role; 8 assertions).` |
+| `php -d extension=gd tests\commerce_api_security_test.php` | PASS — `Commerce API security tests passed (144 assertions).` Rerun random-invariant seed: `3780260`. Ran against the isolated PHP test router/database. |
+| `php tests\auth_registration_verification_test.php` | PASS — 3 consecutive runs passed (9 assertions each) through the local SMTP catcher. |
 | `npm run build` | PASS — both root and webapp Vite production builds completed. |
-| `npm run test:e2e -- --workers=1` | PASS — 10/10 Playwright tests passed (1.8 min) against `tests/api_test_router.php` and the isolated database. Includes live-data cart refresh, GCash rejection/duplicate reference/re-upload/approval/next-order/Ready/Completed, COD delivery, pickup cash, short stock, customer and owner cancellation with stock return, owner-route denial, XSS-as-text, database status/stock/log/report/notification assertions, responsive checks, and screenshots. No API fixtures are used. |
-| `php -l tests\api_test_router.php` | PASS — no syntax errors. |
+| `npm run test:e2e` | PASS — 13/13 Playwright tests passed (1.3 min) against the isolated database. Includes stock reason/archive, product image upload/replace/remove, replay, and dropped-response coverage. |
+| `php -l` on changed PHP files and PHP test/router files | PASS — no syntax errors. |
 | `git diff --check` | PASS — no whitespace errors. |
 | Isolated database backup/restore | PASS — separate restore database matched all 17 tables, table row counts, schema dump hash, and data dump hash; the restore database and temporary dump were removed. |
 | CSS font-size search | PASS — no pixel-valued `font-size` declarations found in `webapp/src`; the smallest shared size token is `.75rem` (12px at the 16px root), used for permitted group-label/small-hint text. |

@@ -203,13 +203,30 @@ if ($action === 'inspect') {
         $stock->execute([(int) $product['id']]);
         $sum = $pdo->prepare('SELECT COALESCE(SUM(change_qty), 0) FROM stock_movements WHERE product_id = ?');
         $sum->execute([(int) $product['id']]);
-        $stocks[$key] = ['stock' => (int) $stock->fetchColumn(), 'movementSum' => (int) $sum->fetchColumn()];
+        $image = $pdo->prepare('SELECT image_path FROM products WHERE id = ?');
+        $image->execute([(int) $product['id']]);
+        $stocks[$key] = [
+            'stock' => (int) $stock->fetchColumn(),
+            'movementSum' => (int) $sum->fetchColumn(),
+            'imagePath' => $image->fetchColumn() ?: null,
+        ];
+    }
+    $fixtureProductIds = array_map(static fn(array $product): int => (int) $product['id'], array_values($fixture['products']));
+    if ($fixtureProductIds) {
+        $marks = implode(',', array_fill(0, count($fixtureProductIds), '?'));
+        $allMovementQuery = $pdo->prepare(
+            "SELECT order_id, product_id, change_qty, type, reason FROM stock_movements
+             WHERE product_id IN ($marks) ORDER BY id"
+        );
+        $allMovementQuery->execute($fixtureProductIds);
+        $movements = $allMovementQuery->fetchAll(PDO::FETCH_ASSOC);
     }
     $emit(['orders' => $orders, 'proofs' => $proofs, 'notifications' => $notifications, 'movements' => $movements, 'stocks' => $stocks]);
 }
 
 if ($action === 'cleanup') {
     $fixture = $json($argv[2] ?? '');
+    $productImagePaths = [];
     if (($fixture['database'] ?? '') !== $testDatabase) {
         throw new RuntimeException('Cleanup payload does not match the isolated database.');
     }
@@ -241,7 +258,14 @@ if ($action === 'cleanup') {
         $pdo->prepare("DELETE FROM cart_items WHERE user_id IN ($marks)")->execute($allUserIds);
         $pdo->prepare("DELETE FROM notifications WHERE user_id IN ($marks)")->execute($allUserIds);
         $pdo->prepare("DELETE FROM audit_log WHERE user_id IN ($marks)")->execute($allUserIds);
+        $pdo->prepare("DELETE FROM stock_change_archives WHERE actor_user_id IN ($marks)")->execute($allUserIds);
         foreach ($fixture['products'] as $product) {
+            $image = $pdo->prepare('SELECT image_path FROM products WHERE id = ?');
+            $image->execute([(int) $product['id']]);
+            $relativePath = $image->fetchColumn();
+            if (is_string($relativePath) && str_starts_with($relativePath, 'private/uploads/products/')) {
+                $productImagePaths[] = $relativePath;
+            }
             $pdo->prepare('DELETE FROM stock_movements WHERE product_id = ?')->execute([(int) $product['id']]);
             $pdo->prepare('DELETE FROM products WHERE id = ? AND slug = ?')->execute([(int) $product['id'], $product['slug']]);
         }
@@ -270,6 +294,12 @@ if ($action === 'cleanup') {
             $path = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
             if (is_file($path) && !unlink($path)) {
                 throw new RuntimeException('Could not remove a generated proof image.');
+            }
+        }
+        foreach ($productImagePaths as $relativePath) {
+            $path = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+            if (is_file($path) && !unlink($path)) {
+                throw new RuntimeException('Could not remove a generated product image.');
             }
         }
     }

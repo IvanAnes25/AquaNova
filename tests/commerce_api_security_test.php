@@ -20,6 +20,7 @@ $uploadedPaths = [];
 $userIds = [];
 $orderIds = [];
 $proofIds = [];
+$createdProductIds = [];
 $settingsBefore = [];
 $originalQrPath = null;
 $originalQrBackup = null;
@@ -58,9 +59,18 @@ final class ApiTestClient
         $cookieFiles[] = $this->cookieFile;
     }
 
-    public function request(string $method, string $path, array|string|null $data = null, bool $withCsrf = true): array
+    public function request(
+        string $method,
+        string $path,
+        array|string|null $data = null,
+        bool $withCsrf = true,
+        ?string $idempotencyKey = null
+    ): array
     {
         $headers = ['Accept: application/json'];
+        if ($method !== 'GET') {
+            $headers[] = 'Idempotency-Key: ' . ($idempotencyKey ?? bin2hex(random_bytes(16)));
+        }
         $responseHeaders = [];
         $options = [
             CURLOPT_RETURNTRANSFER => true,
@@ -140,7 +150,7 @@ final class ApiTestClient
         }
     }
 
-    public function asyncHandle(string $path, array $data): CurlHandle
+    public function asyncHandle(string $path, array $data, ?string $idempotencyKey = null): CurlHandle
     {
         $handle = curl_init($this->baseUrl . $path);
         curl_setopt_array($handle, [
@@ -149,7 +159,11 @@ final class ApiTestClient
             CURLOPT_POSTFIELDS => json_encode($data, JSON_THROW_ON_ERROR),
             CURLOPT_COOKIEFILE => $this->cookieFile,
             CURLOPT_COOKIEJAR => $this->cookieFile,
-            CURLOPT_HTTPHEADER => ['Accept: application/json', 'Content-Type: application/json', 'X-CSRF-Token: ' . $this->csrfToken],
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json', 'Content-Type: application/json',
+                'X-CSRF-Token: ' . $this->csrfToken,
+                'Idempotency-Key: ' . ($idempotencyKey ?? bin2hex(random_bytes(16))),
+            ],
             CURLOPT_TIMEOUT => 30,
         ]);
         return $handle;
@@ -252,6 +266,54 @@ try {
     $assert($customerSettings['status'] === 403, 'Customers must not read owner settings.');
     $ownerSettings = $ownerA->request('GET', '/api/v1/owner/settings');
     $assert($ownerSettings['status'] === 200 && is_array($ownerSettings['json']['settings'] ?? null), 'Owner settings must be readable by owners.');
+    $categoryName = $pdo->prepare('SELECT name FROM categories WHERE id = :id');
+    $categoryName->execute(['id' => $category]);
+    $productPayload = [
+        'name' => 'Idempotent product ' . $tag,
+        'category' => (string) $categoryName->fetchColumn(),
+        'price' => 10,
+        'stock' => 0,
+        'description' => 'Idempotency test product.',
+    ];
+    $missingIdempotencyKey = $ownerA->request(
+        'POST',
+        '/api/v1/owner/products',
+        $productPayload,
+        true,
+        ''
+    );
+    $assert($missingIdempotencyKey['status'] === 428, 'Product creation must reject a missing idempotency key.');
+    $idempotencyKey = bin2hex(random_bytes(16));
+    $productOne = $ownerA->asyncHandle('/api/v1/owner/products', $productPayload, $idempotencyKey);
+    $productTwo = $ownerA->asyncHandle('/api/v1/owner/products', $productPayload, $idempotencyKey);
+    $multi = curl_multi_init();
+    curl_multi_add_handle($multi, $productOne);
+    curl_multi_add_handle($multi, $productTwo);
+    do {
+        $multiStatus = curl_multi_exec($multi, $running);
+        if ($running) {
+            curl_multi_select($multi, 1.0);
+        }
+    } while ($running && $multiStatus === CURLM_OK);
+    $productStatuses = [
+        (int) curl_getinfo($productOne, CURLINFO_RESPONSE_CODE),
+        (int) curl_getinfo($productTwo, CURLINFO_RESPONSE_CODE),
+    ];
+    sort($productStatuses);
+    foreach ([$productOne, $productTwo] as $handle) {
+        curl_multi_remove_handle($multi, $handle);
+        curl_close($handle);
+    }
+    curl_multi_close($multi);
+    $createdProduct = $pdo->prepare('SELECT id FROM products WHERE name = :name');
+    $createdProduct->execute(['name' => $productPayload['name']]);
+    $createdProductResult = array_map('intval', $createdProduct->fetchAll(PDO::FETCH_COLUMN));
+    array_push($createdProductIds, ...$createdProductResult);
+    $assert(
+        ($productStatuses === [201, 201] || $productStatuses === [201, 409])
+            && count($createdProductResult) === 1,
+        'Concurrent duplicate product creates must replay or conflict and produce exactly one product.'
+    );
     $setting = $pdo->prepare('SELECT setting_value FROM settings WHERE setting_key = :key');
     foreach (['cod_enabled', 'delivery_fee', 'gcash_qr_path'] as $settingKey) {
         $setting->execute(['key' => $settingKey]);
@@ -366,10 +428,22 @@ try {
     $pdo->prepare('UPDATE products SET stock = 1 WHERE id = :id')->execute(['id' => $productId]);
     $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 2)')
         ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
-    $shortStock = $customer->request('POST', '/api/v1/orders', [
+    $shortStockPayload = [
         'fulfillment' => 'pickup', 'paymentMethod' => 'cash_pickup', 'name' => 'Test', 'phone' => '5550000',
-    ]);
-    $assert($shortStock['status'] === 409, 'Checkout must reject a cart quantity above current stock.');
+    ];
+    $shortStockKey = bin2hex(random_bytes(16));
+    $shortStock = $customer->request('POST', '/api/v1/orders', $shortStockPayload, true, $shortStockKey);
+    $shortStockReplay = $customer->request('POST', '/api/v1/orders', $shortStockPayload, true, $shortStockKey);
+    $assert(
+        $shortStock['status'] === 409
+            && $shortStockReplay['status'] === 409
+            && $shortStockReplay['body'] === $shortStock['body']
+            && ($shortStockReplay['headers']['idempotent-replay'][0] ?? '') === 'true',
+        'A definitive 4xx short-stock result must be replayed by the same key; first='
+            . $shortStock['status'] . ' replay=' . $shortStockReplay['status']
+            . ' body=' . $shortStockReplay['body']
+            . ' replay-header=' . ($shortStockReplay['headers']['idempotent-replay'][0] ?? 'missing')
+    );
     $pdo->prepare('DELETE FROM cart_items WHERE user_id = :user_id')->execute(['user_id' => $userIds[0]]);
     $wrongCombination = $customer->request('POST', '/api/v1/orders', [
         'fulfillment' => 'pickup', 'paymentMethod' => 'cod', 'name' => 'Test', 'phone' => '5550000',
@@ -380,6 +454,44 @@ try {
         'phone' => '5550000', 'address' => 'Test address',
     ]);
     $assert($wrongDeliveryCombination['status'] === 422, 'Delivery cannot use cash-at-shop payment.');
+    $pdo->prepare(
+        "INSERT INTO settings (setting_key, setting_value)
+         VALUES ('delivery_fee', '-1')
+         ON DUPLICATE KEY UPDATE setting_value = '-1'"
+    )->execute();
+    $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
+        ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
+    $serverErrorKey = bin2hex(random_bytes(16));
+    $serverErrorPayload = [
+        'fulfillment' => 'delivery', 'paymentMethod' => 'cod', 'name' => 'Test',
+        'phone' => '5550000', 'address' => 'Test address',
+    ];
+    $serverErrorFirst = $customer->request('POST', '/api/v1/orders', $serverErrorPayload, true, $serverErrorKey);
+    $serverErrorReplay = $customer->request('POST', '/api/v1/orders', $serverErrorPayload, true, $serverErrorKey);
+    $serverErrorRow = $pdo->prepare(
+        'SELECT COUNT(*) FROM idempotency_requests
+         WHERE user_id = :user_id AND request_hash = :request_hash'
+    );
+    $serverErrorRow->execute([
+        'user_id' => $userIds[0],
+        'request_hash' => hash('sha256', $serverErrorKey),
+    ]);
+    $pdo->prepare(
+        "INSERT INTO settings (setting_key, setting_value)
+         VALUES ('delivery_fee', '0')
+         ON DUPLICATE KEY UPDATE setting_value = '0'"
+    )->execute();
+    $pdo->prepare('DELETE FROM cart_items WHERE user_id = :user_id')->execute(['user_id' => $userIds[0]]);
+    $assert(
+        $serverErrorFirst['status'] === 500
+            && $serverErrorReplay['status'] === 500
+            && (int) $serverErrorRow->fetchColumn() === 0,
+        'A 5xx result must release the key so the retry runs again and the key row is removed; first='
+            . $serverErrorFirst['status'] . ' replay=' . $serverErrorReplay['status']
+            . ' row=' . (int) $serverErrorRow->fetchColumn()
+            . ' firstBody=' . $serverErrorFirst['body']
+            . ' replayBody=' . $serverErrorReplay['body']
+    );
 
     $raceOne = $createOrder($userIds[0], $productId, 'R1', 'gcash', 'under_review');
     $raceTwo = $createOrder($userIds[1], $productId, 'R2', 'gcash', 'under_review');
@@ -469,6 +581,36 @@ try {
         'Restocking above the threshold must reset the next low-stock alert crossing.'
     );
 
+    $missingReason = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
+        'productId' => $productId, 'quantity' => 1, 'type' => 'restock', 'reason' => '',
+    ]);
+    $assert($missingReason['status'] === 422, 'Every stock change must require a reason.');
+    $largeWithoutConfirmation = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
+        'productId' => $productId, 'quantity' => 50, 'type' => 'restock', 'reason' => 'Bulk supplier delivery',
+    ]);
+    $assert($largeWithoutConfirmation['status'] === 422,
+        'Large stock changes of 50 units or more must require confirmation.');
+    $archiveBefore = $pdo->prepare(
+        'SELECT COUNT(*) FROM stock_change_archives WHERE product_id = :product_id'
+    );
+    $archiveBefore->execute(['product_id' => $productId]);
+    $archiveBeforeCount = (int) $archiveBefore->fetchColumn();
+    $largeConfirmed = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
+        'productId' => $productId, 'quantity' => 50, 'type' => 'restock',
+        'reason' => 'Bulk supplier delivery', 'confirmedLargeChange' => true,
+    ]);
+    $archiveCount = $pdo->prepare(
+        'SELECT COUNT(*) FROM stock_change_archives WHERE product_id = :product_id'
+    );
+    $archiveCount->execute(['product_id' => $productId]);
+    $assert(
+        $largeConfirmed['status'] === 200
+            && (int) $archiveCount->fetchColumn() === $archiveBeforeCount + 1,
+        'Confirmed large stock changes must write both a movement and archive record; status='
+            . $largeConfirmed['status'] . ' body=' . $largeConfirmed['body']
+            . ' archive=' . (int) $archiveCount->fetchColumn()
+    );
+
     $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
         ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
     $placedOrder = $customer->request('POST', '/api/v1/orders', [
@@ -479,6 +621,129 @@ try {
     if ($placedOrderId > 0) {
         $orderIds[] = $placedOrderId;
     }
+    $idempotentCartKey = bin2hex(random_bytes(16));
+    $idempotentOrderPayload = [
+        'fulfillment' => 'pickup',
+        'paymentMethod' => 'cash_pickup',
+        'name' => 'Idempotent test',
+        'phone' => '5550000',
+    ];
+    $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
+        ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
+    $ordersBeforeReplay = (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE user_id = {$userIds[0]}")->fetchColumn();
+    $idempotentFirst = $customer->request('POST', '/api/v1/orders', $idempotentOrderPayload, true, $idempotentCartKey);
+    $idempotentReplay = $customer->request('POST', '/api/v1/orders', $idempotentOrderPayload, true, $idempotentCartKey);
+    $ordersAfterReplay = (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE user_id = {$userIds[0]}")->fetchColumn();
+    $idempotentOrderId = (int) ($idempotentFirst['json']['order']['databaseId'] ?? 0);
+    if ($idempotentOrderId > 0) {
+        $orderIds[] = $idempotentOrderId;
+    }
+    $assert(
+        $idempotentFirst['status'] === 201
+            && $idempotentReplay['status'] === $idempotentFirst['status']
+            && $idempotentReplay['body'] === $idempotentFirst['body']
+            && ($idempotentReplay['headers']['idempotent-replay'][0] ?? '') === 'true'
+            && $ordersAfterReplay === $ordersBeforeReplay + 1,
+        'The same key and payload must replay the identical order response and create one order.'
+    );
+    $differentPayload = $customer->request('POST', '/api/v1/orders', [
+        ...$idempotentOrderPayload,
+        'name' => 'Different payload',
+    ], true, $idempotentCartKey);
+    $assert($differentPayload['status'] === 422
+        && str_contains((string) ($differentPayload['json']['message'] ?? ''), 'different request payload'),
+        'A reused key with a different payload must return 422.');
+
+    $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
+        ->execute(['user_id' => $userIds[1], 'product_id' => $productId]);
+    $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
+        ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
+    $crossUserKey = bin2hex(random_bytes(16));
+    $crossStockBefore = (int) $pdo->query(
+        'SELECT stock FROM products WHERE id = ' . (int) $productId
+    )->fetchColumn();
+    $pdo->prepare('UPDATE products SET stock = 100 WHERE id = :id')->execute(['id' => $productId]);
+    $crossUserFirst = $customer->request('POST', '/api/v1/orders', $idempotentOrderPayload, true, $crossUserKey);
+    $crossUserSecond = $otherCustomer->request('POST', '/api/v1/orders', $idempotentOrderPayload, true, $crossUserKey);
+    $assert($crossUserFirst['status'] === 201 && $crossUserSecond['status'] === 201,
+        'One user key must not replay another user response; first='
+            . $crossUserFirst['status'] . ' second=' . $crossUserSecond['status']
+            . ' bodies=' . $crossUserFirst['body'] . ' / ' . $crossUserSecond['body']);
+    foreach ([$crossUserFirst, $crossUserSecond] as $crossUserResponse) {
+        $crossUserOrderId = (int) ($crossUserResponse['json']['order']['databaseId'] ?? 0);
+        if ($crossUserOrderId > 0) $orderIds[] = $crossUserOrderId;
+    }
+    $pdo->prepare('UPDATE products SET stock = :stock WHERE id = :id')
+        ->execute(['stock' => $crossStockBefore, 'id' => $productId]);
+
+    $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
+        ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
+    $parallelKey = bin2hex(random_bytes(16));
+    $parallelOrdersBefore = (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE user_id = {$userIds[0]}")->fetchColumn();
+    $parallelOne = $customer->asyncHandle('/api/v1/orders', $idempotentOrderPayload, $parallelKey);
+    $parallelTwo = $customer->asyncHandle('/api/v1/orders', $idempotentOrderPayload, $parallelKey);
+    $multi = curl_multi_init();
+    curl_multi_add_handle($multi, $parallelOne);
+    curl_multi_add_handle($multi, $parallelTwo);
+    do {
+        $multiStatus = curl_multi_exec($multi, $running);
+        if ($running) curl_multi_select($multi, 1.0);
+    } while ($running && $multiStatus === CURLM_OK);
+    $parallelStatuses = [
+        (int) curl_getinfo($parallelOne, CURLINFO_RESPONSE_CODE),
+        (int) curl_getinfo($parallelTwo, CURLINFO_RESPONSE_CODE),
+    ];
+    sort($parallelStatuses);
+    curl_multi_remove_handle($multi, $parallelOne);
+    curl_multi_remove_handle($multi, $parallelTwo);
+    curl_close($parallelOne);
+    curl_close($parallelTwo);
+    curl_multi_close($multi);
+    $parallelOrdersAfter = (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE user_id = {$userIds[0]}")->fetchColumn();
+    $assert(
+        ($parallelStatuses === [201, 201] || $parallelStatuses === [201, 409])
+            && $parallelOrdersAfter === $parallelOrdersBefore + 1,
+        'Parallel identical order requests must create exactly one order.'
+    );
+
+    $notificationCount = $pdo->prepare(
+        "SELECT COUNT(*) FROM notifications
+         WHERE order_id = :order_id AND title = 'New order'
+         AND user_id IN (:owner_a, :owner_b)"
+    );
+    $notificationCount->execute([
+        'order_id' => $idempotentOrderId,
+        'owner_a' => $userIds[2],
+        'owner_b' => $userIds[3],
+    ]);
+    $newOrderNotificationCount = (int) $notificationCount->fetchColumn();
+    $assert($newOrderNotificationCount === 2,
+        'The replayed order response must not create duplicate New order notifications for the two owners; count='
+            . $newOrderNotificationCount . ' order=' . $idempotentOrderId);
+    $confirmKey = bin2hex(random_bytes(16));
+    $confirmFirst = $ownerA->request(
+        'POST',
+        '/api/v1/owner/orders/' . $idempotentOrderId . '/actions',
+        ['action' => 'confirm_cash'],
+        true,
+        $confirmKey
+    );
+    $confirmReplay = $ownerA->request(
+        'POST',
+        '/api/v1/owner/orders/' . $idempotentOrderId . '/actions',
+        ['action' => 'confirm_cash'],
+        true,
+        $confirmKey
+    );
+    $saleCount = $pdo->prepare("SELECT COUNT(*) FROM stock_movements WHERE order_id = :order_id AND type = 'sale'");
+    $saleCount->execute(['order_id' => $idempotentOrderId]);
+    $assert(
+        $confirmFirst['status'] === 200
+            && $confirmReplay['status'] === 200
+            && $confirmReplay['body'] === $confirmFirst['body']
+            && (int) $saleCount->fetchColumn() === 1,
+        'Repeating an owner order action must replay once and create exactly one stock movement.'
+    );
     $ownerOrderNotifications = $pdo->prepare(
         "SELECT COUNT(*) FROM notifications WHERE order_id = :order_id AND title = 'New order' AND user_id IN (:first, :second)"
     );
@@ -583,7 +848,7 @@ try {
     $assertStockInvariant('adjustment');
     $overAdjustment = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
         'productId' => $productId, 'quantity' => -100000, 'type' => 'adjustment',
-        'reason' => $stockTestNote, 'note' => 'must not go negative',
+        'reason' => $stockTestNote, 'note' => 'must not go negative', 'confirmedLargeChange' => true,
     ]);
     $assert($overAdjustment['status'] === 409, 'Stock invariant must reject an adjustment that would go below zero.');
     $assertStockInvariant('rejected below-zero adjustment');
@@ -733,6 +998,74 @@ try {
             && str_ends_with($gifImagePath, '.png'),
         'A supported non-PNG/JPG image must be normalized to a safe PNG for display.'
     );
+
+    $productImageCustomer = $customer->request('POST', '/api/v1/owner/products/' . $productId . '/image', [
+        'image' => new CURLFile($validImageFile, 'image/png', 'customer.png'),
+    ]);
+    $assert($productImageCustomer['status'] === 403,
+        'Customers must not upload product images.');
+    $productImageUpload = $ownerA->request('POST', '/api/v1/owner/products/' . $productId . '/image', [
+        'image' => new CURLFile($validImageFile, 'image/png', 'product.png'),
+    ]);
+    $assert($productImageUpload['status'] === 201,
+        'Owners must be able to upload a valid product image.');
+    $productImageRow = $pdo->prepare('SELECT image_path FROM products WHERE id = :id');
+    $productImageRow->execute(['id' => $productId]);
+    $firstProductImage = (string) $productImageRow->fetchColumn();
+    $uploadedPaths[] = $firstProductImage;
+    $productImageReplace = $ownerA->request('POST', '/api/v1/owner/products/' . $productId . '/image', [
+        'image' => new CURLFile($validImageFile, 'image/png', 'product-replacement.png'),
+    ]);
+    $assert($productImageReplace['status'] === 201,
+        'Owners must be able to replace a product image.');
+    $productImageRow->execute(['id' => $productId]);
+    $secondProductImage = (string) $productImageRow->fetchColumn();
+    $uploadedPaths[] = $secondProductImage;
+    $assert($secondProductImage !== '' && $secondProductImage !== $firstProductImage
+        && !is_file(dirname(__DIR__) . '/' . $firstProductImage),
+        'Replacing a product image must change the reference and delete the old file.');
+    $phpNamedImage = tempnam(sys_get_temp_dir(), 'aquatica-product-php-');
+    $temporaryFiles[] = $phpNamedImage;
+    file_put_contents($phpNamedImage, '<?php echo "blocked";');
+    $renamedPhpImage = $ownerA->request('POST', '/api/v1/owner/products/' . $productId . '/image', [
+        'image' => new CURLFile($phpNamedImage, 'image/jpeg', 'payload.jpg'),
+    ]);
+    $assert($renamedPhpImage['status'] === 422,
+        'PHP payloads renamed as JPG must be rejected for product images.');
+    $appendedImage = tempnam(sys_get_temp_dir(), 'aquatica-product-appended-');
+    $temporaryFiles[] = $appendedImage;
+    copy($validImageFile, $appendedImage);
+    file_put_contents($appendedImage, '<?php echo "blocked";', FILE_APPEND);
+    $appendedProductImage = $ownerA->request('POST', '/api/v1/owner/products/' . $productId . '/image', [
+        'image' => new CURLFile($appendedImage, 'image/png', 'appended.png'),
+    ]);
+    $assert($appendedProductImage['status'] === 422,
+        'Appended payloads must be rejected for product images.');
+    $wrongTypeProductImage = $ownerA->request('POST', '/api/v1/owner/products/' . $productId . '/image', [
+        'image' => new CURLFile($phpNamedImage, 'text/plain', 'image.txt'),
+    ]);
+    $assert($wrongTypeProductImage['status'] === 422,
+        'Wrong content types must be rejected for product images.');
+    $oversizeProductImage = tempnam(sys_get_temp_dir(), 'aquatica-product-large-');
+    $temporaryFiles[] = $oversizeProductImage;
+    file_put_contents($oversizeProductImage, str_repeat('A', 2 * 1024 * 1024 + 1));
+    $oversizeProductUpload = $ownerA->request('POST', '/api/v1/owner/products/' . $productId . '/image', [
+        'image' => new CURLFile($oversizeProductImage, 'image/png', 'oversize.png'),
+    ]);
+    $assert($oversizeProductUpload['status'] === 422,
+        'Product images over 2 MB must be rejected.');
+    $productImageRemove = $ownerA->request('DELETE', '/api/v1/owner/products/' . $productId . '/image');
+    $assert($productImageRemove['status'] === 200,
+        'Owners must be able to remove a product image.');
+    $productImageRow->execute(['id' => $productId]);
+    $removedProductImage = $productImageRow->fetchColumn();
+    $assert(
+        $removedProductImage === null
+            && !is_file(dirname(__DIR__) . '/' . $secondProductImage),
+        'Removing a product image must clear the database reference and delete the file.');
+    if ($secondProductImage !== '') {
+        $uploadedPaths[] = $secondProductImage;
+    }
     $duplicateReferenceOrder = $createOrder($userIds[1], $productId, 'DUPREF', 'gcash', 'unpaid');
     $duplicateReference = $otherCustomer->request('POST', '/api/v1/orders/' . $duplicateReferenceOrder . '/payment-proof', [
         'reference' => strtoupper(substr($tag, 0, 8)) . 'GOOD',
@@ -790,6 +1123,20 @@ try {
         $pdo->prepare('UPDATE products SET stock = :stock, low_stock_threshold = :threshold WHERE id = :id')
             ->execute(['stock' => $oldStock, 'threshold' => $oldThreshold, 'id' => $productId]);
     }
+    if ($productId) {
+        $bulkMovementIds = $pdo->prepare(
+            'SELECT movement_id FROM stock_change_archives WHERE product_id = :product_id'
+        );
+        $bulkMovementIds->execute(['product_id' => $productId]);
+        $bulkIds = array_map('intval', $bulkMovementIds->fetchAll(PDO::FETCH_COLUMN));
+        if ($bulkIds) {
+            $placeholders = implode(',', array_fill(0, count($bulkIds), '?'));
+            $pdo->prepare("DELETE FROM stock_change_archives WHERE movement_id IN ($placeholders)")
+                ->execute($bulkIds);
+            $pdo->prepare("DELETE FROM stock_movements WHERE id IN ($placeholders)")
+                ->execute($bulkIds);
+        }
+    }
     if ($productId && $stockTestNote !== '') {
         $pdo->prepare('DELETE FROM stock_movements WHERE product_id = :id AND note LIKE :note')
             ->execute(['id' => $productId, 'note' => $stockTestNote . '%']);
@@ -805,6 +1152,14 @@ try {
             }
         }
     }
+    foreach ($userIds as $cleanupUserId) {
+        $cleanupOrders = $pdo->prepare('SELECT id FROM orders WHERE user_id = :id');
+        $cleanupOrders->execute(['id' => $cleanupUserId]);
+        foreach ($cleanupOrders->fetchAll(PDO::FETCH_COLUMN) as $cleanupOrderId) {
+            $orderIds[] = (int) $cleanupOrderId;
+        }
+    }
+    $orderIds = array_values(array_unique(array_map('intval', $orderIds)));
     foreach ($orderIds as $orderId) {
         $pdo->prepare('DELETE FROM notifications WHERE order_id = :id')->execute(['id' => $orderId]);
         $pdo->prepare('DELETE FROM audit_log WHERE entity = "order" AND entity_id = :id')->execute(['id' => (string) $orderId]);
@@ -813,6 +1168,12 @@ try {
         $pdo->prepare('DELETE FROM payment_proofs WHERE order_id = :id')->execute(['id' => $orderId]);
         $pdo->prepare('DELETE FROM order_items WHERE order_id = :id')->execute(['id' => $orderId]);
         $pdo->prepare('DELETE FROM orders WHERE id = :id')->execute(['id' => $orderId]);
+    }
+    foreach ($createdProductIds as $createdProductId) {
+        $pdo->prepare('DELETE FROM audit_log WHERE entity = "product" AND entity_id = :id')->execute([
+            'id' => (string) $createdProductId,
+        ]);
+        $pdo->prepare('DELETE FROM products WHERE id = :id')->execute(['id' => $createdProductId]);
     }
     foreach ($userIds as $userId) {
         $pdo->prepare('DELETE FROM cart_items WHERE user_id = :id')->execute(['id' => $userId]);

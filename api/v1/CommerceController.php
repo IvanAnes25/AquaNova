@@ -70,6 +70,143 @@ final class CommerceController
         return request_json();
     }
 
+    private function canonicalPayloadHash(array $payload): string
+    {
+        $normalize = static function (mixed $value) use (&$normalize): mixed {
+            if (is_array($value)) {
+                $keys = array_keys($value);
+                sort($keys, SORT_STRING);
+                $normalized = [];
+                foreach ($keys as $key) {
+                    $normalized[$key] = $normalize($value[$key]);
+                }
+                return $normalized;
+            }
+            return $value;
+        };
+        $canonical = json_encode($normalize($payload), JSON_UNESCAPED_SLASHES);
+        return hash('sha256', $canonical === false ? '' : $canonical);
+    }
+
+    private function replayIdempotencyResponse(int $status, string $body): never
+    {
+        header('Idempotent-Replay: true');
+        http_response_code($status);
+        echo $body;
+        exit;
+    }
+
+    private function claimIdempotency(array $user, string $scope, array $payload): void
+    {
+        $key = (string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? '');
+        if (!preg_match('/^[A-Za-z0-9._:-]{16,128}$/', $key)) {
+            json_response(['message' => 'A valid Idempotency-Key header is required for this action.'], 428);
+        }
+
+        $db = $this->db();
+        $db->exec('DELETE FROM idempotency_requests WHERE expires_at <= UTC_TIMESTAMP()');
+        $keyHash = hash('sha256', $key);
+        $payloadHash = $this->canonicalPayloadHash($payload);
+        $endpoint = ($_SERVER['REQUEST_METHOD'] ?? 'POST') . ' ' . (($path = $_SERVER['SCRIPT_NAME'] ?? '') !== '' ? $path : '')
+            . '/' . trim((string) ($_GET['path'] ?? ''), '/');
+        $existingBeforeInsert = $db->prepare(
+            'SELECT scope, endpoint, payload_hash, response_status, response_body, state
+             FROM idempotency_requests
+             WHERE user_id = :user_id AND request_hash = :request_hash
+             ORDER BY created_at DESC LIMIT 1'
+        );
+        $existingBeforeInsert->execute(['user_id' => $user['id'], 'request_hash' => $keyHash]);
+        $existingRecord = $existingBeforeInsert->fetch();
+        if ($existingRecord) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            if ($existingRecord['endpoint'] !== $endpoint) {
+                json_response([
+                    'message' => 'This Idempotency-Key was already used for a different endpoint.',
+                ], 422);
+            }
+            if ($existingRecord['payload_hash'] !== $payloadHash) {
+                json_response([
+                    'message' => 'This Idempotency-Key was already used for a different request payload.',
+                ], 422);
+            }
+            if ($existingRecord['state'] === 'in_progress') {
+                header('Retry-After: 1');
+                json_response(['message' => 'This request is already in progress. Please retry shortly.'], 409);
+            }
+            if ($existingRecord['state'] === 'completed'
+                && $existingRecord['response_status'] !== null
+                && $existingRecord['response_body'] !== null) {
+                $this->replayIdempotencyResponse(
+                    (int) $existingRecord['response_status'],
+                    (string) $existingRecord['response_body']
+                );
+            }
+            json_response(['message' => 'This request has not completed. Please retry shortly.'], 409);
+        }
+        try {
+            $statement = $db->prepare(
+                'INSERT INTO idempotency_requests
+                 (user_id, scope, endpoint, request_hash, payload_hash, expires_at, state)
+                 VALUES
+                 (:user_id, :scope, :endpoint, :request_hash, :payload_hash,
+                  DATE_ADD(UTC_TIMESTAMP(), INTERVAL 24 HOUR), \'in_progress\')'
+            );
+            $statement->execute([
+                'user_id' => $user['id'],
+                'scope' => $scope,
+                'endpoint' => $endpoint,
+                'request_hash' => $keyHash,
+                'payload_hash' => $payloadHash,
+            ]);
+        } catch (PDOException $exception) {
+            if ($exception->getCode() !== '23000') {
+                throw $exception;
+            }
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            $existing = $db->prepare(
+                'SELECT endpoint, payload_hash, response_status, response_body, state
+                 FROM idempotency_requests
+                 WHERE user_id = :user_id AND scope = :scope AND request_hash = :request_hash
+                 LIMIT 1'
+            );
+            $existing->execute(['user_id' => $user['id'], 'scope' => $scope, 'request_hash' => $keyHash]);
+            $record = $existing->fetch();
+            if (!$record) {
+                json_response(['message' => 'This request could not be replayed. Please retry.'], 409);
+            }
+            if ($record['payload_hash'] !== $payloadHash) {
+                json_response([
+                    'message' => 'This Idempotency-Key was already used for a different request payload.',
+                ], 422);
+            }
+            if ($record['endpoint'] !== $endpoint) {
+                json_response([
+                    'message' => 'This Idempotency-Key was already used for a different endpoint.',
+                ], 422);
+            }
+            if ($record['state'] === 'in_progress') {
+                header('Retry-After: 1');
+                json_response(['message' => 'This request is already in progress. Please retry shortly.'], 409);
+            }
+            if ($record['state'] === 'completed' && $record['response_status'] !== null && $record['response_body'] !== null) {
+                $this->replayIdempotencyResponse((int) $record['response_status'], (string) $record['response_body']);
+            }
+            json_response(['message' => 'This request has not completed. Please retry shortly.'], 409);
+        }
+        $GLOBALS['idempotency_response_context'] = [
+            'db' => $db,
+            'user_id' => (int) $user['id'],
+            'scope' => $scope,
+            'key_hash' => $keyHash,
+            'endpoint' => $endpoint,
+            'payload_hash' => $payloadHash,
+        ];
+    }
+
     private function settings(): array
     {
         $rows = $this->db()->query('SELECT setting_key, setting_value FROM settings')->fetchAll();
@@ -112,7 +249,9 @@ final class CommerceController
             'price' => (float) $row['price'],
             'stock' => (int) $row['stock'],
             'size' => 'Standard',
-            'image' => $row['image_path'] ?: $row['image_url'],
+            'image' => $row['image_path']
+                ? '/api/v1/catalog/products/' . (int) $row['id'] . '/image'
+                : $row['image_url'],
             'description' => $row['description'] ?: $row['short_description'],
             'shortDescription' => $row['short_description'],
             'featured' => (bool) $row['featured'],
@@ -218,6 +357,11 @@ final class CommerceController
         };
         $fulfillment = $row['fulfillment'] === 'delivery' ? 'Delivery' : 'Pickup';
         $status = ucfirst((string) $row['order_status']);
+        $statusLabel = self::orderStatusLabel(
+            (string) $row['fulfillment'],
+            (string) $row['payment_method_v2'],
+            (string) $row['order_status']
+        );
         $paymentStatus = match ($row['payment_status_v2']) {
             'under_review' => 'Under review',
             'paid' => 'Paid',
@@ -235,10 +379,16 @@ final class CommerceController
             'deliveryFee' => (float) $row['delivery_fee'],
             'total' => (float) $row['total'],
             'delivery' => $fulfillment,
-            'address' => is_array($address) ? ($address['line1'] ?? 'Pickup at shop') : ($row['delivery_address'] ?? ''),
-            'addressDetails' => is_array($address) ? $address : null,
+            'address' => $fulfillment === 'Delivery'
+                ? (is_array($address) ? ($address['line1'] ?? '') : ($row['delivery_address'] ?? ''))
+                : null,
+            'pickupLocation' => $fulfillment === 'Pickup'
+                ? (is_array($address) ? ($address['line1'] ?? 'Pickup at shop') : 'Pickup at shop')
+                : null,
+            'addressDetails' => $fulfillment === 'Delivery' && is_array($address) ? $address : null,
             'method' => $method,
             'status' => $status,
+            'statusLabel' => $statusLabel,
             'paymentStatus' => $paymentStatus,
             'date' => $row['created_at'],
             'createdAt' => strtotime((string) $row['created_at']) * 1000,
@@ -251,6 +401,39 @@ final class CommerceController
             'deliveryBy' => $row['delivery_by'],
             'cancelReason' => $row['cancel_reason'],
         ];
+    }
+
+    private static function orderStatusLabel(string $fulfillment, string $payment, string $status): string
+    {
+        return match ($status) {
+            'ready' => $fulfillment === 'pickup' ? 'Ready for pickup' : 'Out for delivery',
+            'completed' => match ([$fulfillment, $payment]) {
+                ['pickup', 'cash_pickup'] => 'Handed over and paid',
+                ['pickup', 'gcash'] => 'Picked up',
+                ['delivery', 'cod'] => 'Delivered and paid',
+                ['delivery', 'gcash'] => 'Delivered',
+                default => 'Completed',
+            },
+            default => ucfirst($status),
+        };
+    }
+
+    private static function readyNotificationBody(string $fulfillment): string
+    {
+        return $fulfillment === 'pickup'
+            ? 'Your order is ready for pickup.'
+            : 'Your order is out for delivery.';
+    }
+
+    private static function completionNotificationBody(string $fulfillment, string $payment): string
+    {
+        return match ([$fulfillment, $payment]) {
+            ['pickup', 'cash_pickup'] => 'Your order was handed over and paid at the shop.',
+            ['pickup', 'gcash'] => 'Your order was picked up.',
+            ['delivery', 'cod'] => 'Your order was delivered and paid.',
+            ['delivery', 'gcash'] => 'Your order was delivered and your GCash payment is confirmed.',
+            default => 'Your order has been completed.',
+        };
     }
 
     private function latestProof(int $orderId): ?array
@@ -352,6 +535,7 @@ final class CommerceController
         $validEnd = match ($imageMime) {
             'image/png' => str_ends_with((string) $contents, "\x00\x00\x00\x00IEND\xAE\x42\x60\x82"),
             'image/jpeg' => str_ends_with((string) $contents, "\xFF\xD9"),
+            'image/webp' => str_starts_with((string) $contents, 'RIFF') && substr((string) $contents, 8, 4) === 'WEBP',
             default => true,
         };
         if (!is_string($contents) || !$validEnd || stripos($contents, '<?php') !== false
@@ -379,12 +563,18 @@ final class CommerceController
             throw new RuntimeException('Image processing could not be started.');
         }
 
-        $extension = $imageMime === 'image/jpeg' ? 'jpg' : 'png';
+        $extension = match ($imageMime) {
+            'image/jpeg' => 'jpg',
+            'image/webp' => 'webp',
+            default => 'png',
+        };
         if ($extension === 'png') {
             imagesavealpha($image, true);
             $encoded = imagepng($image, $temporaryPath, 6);
-        } else {
+        } elseif ($extension === 'jpg') {
             $encoded = imagejpeg($image, $temporaryPath, 88);
+        } else {
+            $encoded = function_exists('imagewebp') ? imagewebp($image, $temporaryPath, 88) : false;
         }
         imagedestroy($image);
         $encodedSize = $encoded ? filesize($temporaryPath) : false;
@@ -437,7 +627,7 @@ final class CommerceController
             $params['category_name'] = $category;
         }
         $result = $this->paginatedQuery(
-            $this->productSelect() . $where . ' ORDER BY p.featured DESC, p.name',
+            $this->productSelect() . $where . ' ORDER BY (p.stock = 0), p.featured DESC, p.name',
             'SELECT COUNT(*) FROM products p LEFT JOIN categories c ON c.id = p.category_id' . $where,
             $params
         );
@@ -613,6 +803,7 @@ final class CommerceController
 
         $db = $this->db();
         $db->beginTransaction();
+        $this->claimIdempotency($user, 'order.create', $data);
         $cart = $db->prepare(
             'SELECT p.id, p.name, p.price, p.stock, p.is_active, ci.qty
              FROM cart_items ci JOIN products p ON p.id = ci.product_id
@@ -719,6 +910,7 @@ final class CommerceController
         $reason = trim((string) ($data['reason'] ?? 'Cancelled by customer'));
         $db = $this->db();
         $db->beginTransaction();
+        $this->claimIdempotency($user, 'order.cancel.' . $id, $data);
         $order = $this->orderById($id, true);
         if ((int) $order['user_id'] !== (int) $user['id'] || $order['order_status'] !== 'pending') {
             $db->rollBack();
@@ -814,7 +1006,7 @@ final class CommerceController
         $db->prepare('UPDATE orders SET stock_deducted = 0 WHERE id = :id')->execute(['id' => $order['id']]);
     }
 
-    private function insertMovement(int $productId, string $name, int $change, int $before, int $after, string $type, string $reason, ?int $orderId, int $actor): void
+    private function insertMovement(int $productId, string $name, int $change, int $before, int $after, string $type, string $reason, ?int $orderId, int $actor): int
     {
         $legacyType = match ($type) {
             'sale' => 'Order',
@@ -836,6 +1028,7 @@ final class CommerceController
             'legacy_note' => $reason, 'canonical_reason' => $reason,
             'type' => $type, 'order_id' => $orderId,
         ]);
+        return (int) $this->db()->lastInsertId();
     }
 
     public function submitPaymentProof(int $id): never
@@ -852,6 +1045,15 @@ final class CommerceController
         }
         $db = $this->db();
         $db->beginTransaction();
+        $proofPayload = [
+            'reference' => $reference,
+            'file_name' => (string) ($file['name'] ?? ''),
+            'file_size' => (int) ($file['size'] ?? 0),
+            'file_hash' => is_uploaded_file($file['tmp_name'] ?? '')
+                ? hash_file('sha256', $file['tmp_name'])
+                : hash('sha256', ''),
+        ];
+        $this->claimIdempotency($user, 'proof.submit.' . $id, $proofPayload);
         $order = $this->orderById($id, true);
         if ((int) $order['user_id'] !== (int) $user['id'] || $order['order_status'] !== 'pending'
             || $order['payment_method_v2'] !== 'gcash' || !in_array($order['payment_status_v2'], ['unpaid', 'rejected'], true)) {
@@ -961,7 +1163,7 @@ final class CommerceController
             json_response(['message' => 'The configured image file is missing.'], 404);
         }
         $mime = (new finfo(FILEINFO_MIME_TYPE))->file($path);
-        if (!in_array($mime, ['image/jpeg', 'image/png'], true)) {
+        if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true)) {
             json_response(['message' => 'The configured image file is invalid.'], 500);
         }
         header('Content-Type: ' . $mime);
@@ -1031,6 +1233,7 @@ final class CommerceController
         $action = (string) ($data['action'] ?? '');
         $db = $this->db();
         $db->beginTransaction();
+        $this->claimIdempotency($owner, 'order.action.' . $id, $data);
         $order = $this->orderById($id, true);
         try {
             if ($action === 'approve_proof') {
@@ -1104,7 +1307,12 @@ final class CommerceController
                         ->execute(['provider' => $provider, 'id' => $id]);
                 }
                 $this->changeOrderStatus($order, 'ready', (int) $owner['id'], 'Order ready');
-                $this->notify((int) $order['user_id'], $id, 'Order ready', 'Your order is ready for delivery or pickup.');
+                $this->notify(
+                    (int) $order['user_id'],
+                    $id,
+                    'Order ready',
+                    self::readyNotificationBody((string) $order['fulfillment'])
+                );
                 $this->audit((int) $owner['id'], 'order.ready', 'order', $id, ['delivery_by' => $data['deliveryBy'] ?? null]);
             } elseif ($action === 'complete') {
                 if ($order['order_status'] !== 'ready' || !(bool) $order['stock_deducted']) {
@@ -1117,7 +1325,15 @@ final class CommerceController
                     "UPDATE orders SET payment_status_v2 = 'paid', payment_status = 'Verified' WHERE id = :id"
                 )->execute(['id' => $id]);
                 $this->changeOrderStatus($order, 'completed', (int) $owner['id'], 'Order handed over and paid');
-                $this->notify((int) $order['user_id'], $id, 'Order completed', 'Your order has been completed.');
+                $this->notify(
+                    (int) $order['user_id'],
+                    $id,
+                    'Order completed',
+                    self::completionNotificationBody(
+                        (string) $order['fulfillment'],
+                        (string) $order['payment_method_v2']
+                    )
+                );
                 $this->audit((int) $owner['id'], 'order.completed', 'order', $id);
             } elseif ($action === 'cancel') {
                 $reason = trim((string) ($data['reason'] ?? ''));
@@ -1220,6 +1436,7 @@ final class CommerceController
         }
         $db = $this->db();
         $db->beginTransaction();
+        $this->claimIdempotency($owner, 'product.create', $data);
         $categoryId = $this->categoryId($category);
         $base = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '-', $name) ?? '', '-'));
         $slug = ($base !== '' ? $base : 'product') . '-' . bin2hex(random_bytes(3));
@@ -1302,11 +1519,113 @@ final class CommerceController
         json_response(['message' => 'Product updated.']);
     }
 
+    public function productImage(string|int $value): never
+    {
+        $id = $this->productId($value);
+        $statement = $this->db()->prepare('SELECT image_path FROM products WHERE id = :id');
+        $statement->execute(['id' => $id]);
+        $path = $statement->fetchColumn();
+        if (!is_string($path) || $path === '') {
+            json_response(['message' => 'This product has no uploaded image.'], 404);
+        }
+        $this->sendImage($path);
+    }
+
+    public function uploadProductImage(string|int $value): never
+    {
+        $owner = $this->owner();
+        require_csrf();
+        $id = $this->productId($value);
+        $file = $_FILES['image'] ?? null;
+        if (!is_array($file)) {
+            json_response(['message' => 'Choose a JPEG, PNG, or WebP image no larger than 2 MB.'], 422);
+        }
+        $payload = [
+            'file_name' => (string) ($file['name'] ?? ''),
+            'file_size' => (int) ($file['size'] ?? 0),
+            'file_hash' => is_uploaded_file($file['tmp_name'] ?? '')
+                ? hash_file('sha256', $file['tmp_name'])
+                : hash('sha256', ''),
+        ];
+        $db = $this->db();
+        $db->beginTransaction();
+        $this->claimIdempotency($owner, 'product.image.upload.' . $id, $payload);
+        $find = $db->prepare('SELECT image_path FROM products WHERE id = :id FOR UPDATE');
+        $find->execute(['id' => $id]);
+        $existing = $find->fetchColumn();
+        if ($existing === false) {
+            $db->rollBack();
+            json_response(['message' => 'Product not found.'], 404);
+        }
+        $relativePath = $this->storeVerifiedImage($file, 'private/uploads/products', 'product-');
+        $destination = dirname(__DIR__, 2) . '/' . $relativePath;
+        try {
+            $db->prepare('UPDATE products SET image_path = :path, image_url = NULL WHERE id = :id')
+                ->execute(['path' => $relativePath, 'id' => $id]);
+            $this->audit((int) $owner['id'], 'product.image_uploaded', 'product', $id);
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            if (is_file($destination)) {
+                unlink($destination);
+            }
+            throw $exception;
+        }
+        if (is_string($existing) && $existing !== '' && str_starts_with($existing, 'private/uploads/products/')
+            && $existing !== $relativePath) {
+            $oldFile = dirname(__DIR__, 2) . '/' . $existing;
+            if (is_file($oldFile)) {
+                unlink($oldFile);
+            }
+        }
+        json_response([
+            'message' => 'Product image uploaded.',
+            'image' => '/api/v1/catalog/products/' . $id . '/image',
+        ], 201);
+    }
+
+    public function removeProductImage(string|int $value): never
+    {
+        $owner = $this->owner();
+        require_csrf();
+        $id = $this->productId($value);
+        $data = [];
+        $db = $this->db();
+        $db->beginTransaction();
+        $this->claimIdempotency($owner, 'product.image.remove.' . $id, $data);
+        $find = $db->prepare('SELECT image_path FROM products WHERE id = :id FOR UPDATE');
+        $find->execute(['id' => $id]);
+        $existing = $find->fetchColumn();
+        if ($existing === false) {
+            $db->rollBack();
+            json_response(['message' => 'Product not found.'], 404);
+        }
+        $db->prepare('UPDATE products SET image_path = NULL WHERE id = :id')
+            ->execute(['id' => $id]);
+        $this->audit((int) $owner['id'], 'product.image_removed', 'product', $id);
+        $db->commit();
+        if (is_string($existing) && str_starts_with($existing, 'private/uploads/products/')) {
+            $oldFile = dirname(__DIR__, 2) . '/' . $existing;
+            if (is_file($oldFile)) {
+                unlink($oldFile);
+            }
+        }
+        json_response(['message' => 'Product image removed.']);
+    }
+
     public function inventory(): never
     {
         $this->owner();
+        $sort = (string) ($_GET['sort'] ?? 'stock-asc');
+        $orderBy = match ($sort) {
+            'stock-desc' => 'p.stock DESC, p.name',
+            'name' => 'p.name',
+            default => 'p.stock ASC, p.name',
+        };
         $products = $this->paginatedQuery(
-            $this->productSelect() . ' ORDER BY p.name',
+            $this->productSelect() . ' ORDER BY ' . $orderBy,
             'SELECT COUNT(*) FROM products p LEFT JOIN categories c ON c.id = p.category_id',
             [],
             'products'
@@ -1339,12 +1658,18 @@ final class CommerceController
         $type = (string) ($data['type'] ?? 'restock');
         $reason = trim((string) ($data['reason'] ?? ''));
         $note = trim((string) ($data['note'] ?? ''));
+        $confirmedLargeChange = (bool) ($data['confirmedLargeChange'] ?? false);
         if ($amount === false || $amount === 0 || abs($amount) > 100000
-            || !in_array($type, ['restock', 'adjustment'], true) || $reason === '' || strlen($reason) > 500 || strlen($note) > 500) {
+            || !in_array($type, ['restock', 'adjustment'], true)
+            || $reason === '' || strlen($reason) > 500 || strlen($note) > 500) {
             json_response(['message' => 'Enter a valid stock movement and reason.'], 422);
+        }
+        if (abs($amount) >= 50 && !$confirmedLargeChange) {
+            json_response(['message' => 'Large stock changes require confirmation.'], 422);
         }
         $db = $this->db();
         $db->beginTransaction();
+        $this->claimIdempotency($owner, 'stock.move', $data);
         $find = $db->prepare('SELECT name, stock, low_stock_threshold FROM products WHERE id = :id FOR UPDATE');
         $find->execute(['id' => $id]);
         $product = $find->fetch();
@@ -1358,7 +1683,24 @@ final class CommerceController
             json_response(['message' => 'Stock cannot fall below zero.'], 409);
         }
         $db->prepare('UPDATE products SET stock = :stock WHERE id = :id')->execute(['stock' => $after, 'id' => $id]);
-        $this->insertMovement($id, $product['name'], $amount, (int) $product['stock'], $after, $type, $reason . ($note !== '' ? ': ' . $note : ''), null, (int) $owner['id']);
+        $movementId = $this->insertMovement($id, $product['name'], $amount, (int) $product['stock'], $after, $type, $reason . ($note !== '' ? ': ' . $note : ''), null, (int) $owner['id']);
+        if (abs($amount) >= 50) {
+            $archive = $db->prepare(
+                'INSERT INTO stock_change_archives
+                 (movement_id, product_id, actor_user_id, change_qty, stock_before, stock_after, reason, note, confirmed_large_change)
+                 VALUES (:movement_id, :product_id, :actor, :change, :before, :after, :reason, :note, 1)'
+            );
+            $archive->execute([
+                'movement_id' => $movementId,
+                'product_id' => $id,
+                'actor' => (int) $owner['id'],
+                'change' => $amount,
+                'before' => (int) $product['stock'],
+                'after' => $after,
+                'reason' => $reason,
+                'note' => $note,
+            ]);
+        }
         $this->notifyLowStock(
             $id,
             (string) $product['name'],

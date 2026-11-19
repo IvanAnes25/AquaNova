@@ -49,8 +49,56 @@ header("Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; bas
 
 function json_response(array $body, int $status = 200): never
 {
+    $rawBody = json_encode($body, JSON_UNESCAPED_SLASHES);
+    if ($rawBody === false) {
+        $rawBody = '{"message":"The server could not encode the response."}';
+        $status = 500;
+    }
+    if (isset($GLOBALS['idempotency_response_context'])) {
+        $context = $GLOBALS['idempotency_response_context'];
+        $db = $context['db'];
+        if ($status >= 500) {
+            $delete = $db->prepare(
+                'DELETE FROM idempotency_requests
+                 WHERE user_id = :user_id AND scope = :scope AND request_hash = :request_hash'
+            );
+            $delete->execute([
+                'user_id' => $context['user_id'],
+                'scope' => $context['scope'],
+                'request_hash' => $context['key_hash'],
+            ]);
+        } else {
+            $complete = $db->prepare(
+                "INSERT INTO idempotency_requests
+                 (user_id, scope, endpoint, request_hash, payload_hash, expires_at,
+                  response_status, response_body, state, completed_at)
+                 VALUES
+                 (:user_id, :scope, :endpoint, :request_hash, :payload_hash,
+                  DATE_ADD(UTC_TIMESTAMP(), INTERVAL 24 HOUR),
+                  :status, :body, 'completed', UTC_TIMESTAMP())
+                 ON DUPLICATE KEY UPDATE
+                  endpoint = VALUES(endpoint),
+                  payload_hash = VALUES(payload_hash),
+                  expires_at = VALUES(expires_at),
+                  response_status = VALUES(response_status),
+                  response_body = VALUES(response_body),
+                  state = 'completed',
+                  completed_at = UTC_TIMESTAMP()"
+            );
+            $complete->execute([
+                'status' => $status,
+                'body' => $rawBody,
+                'user_id' => $context['user_id'],
+                'scope' => $context['scope'],
+                'endpoint' => $context['endpoint'],
+                'request_hash' => $context['key_hash'],
+                'payload_hash' => $context['payload_hash'],
+            ]);
+        }
+        $GLOBALS['idempotency_response_context'] = null;
+    }
     http_response_code($status);
-    echo json_encode($body, JSON_UNESCAPED_SLASHES);
+    echo $rawBody;
     exit;
 }
 

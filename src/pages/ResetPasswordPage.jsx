@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import AuthLayout, { FormField, FormMessage, SubmitButton } from '../components/AuthLayout.jsx';
+import AuthLayout, { FormField, FormMessage, PasswordField, SubmitButton } from '../components/AuthLayout.jsx';
 import { authPost } from '../lib/authApi.js';
 import { routePath } from '../lib/paths.js';
 
@@ -38,8 +38,8 @@ export default function ResetPasswordPage() {
       <p className="mb-6 text-sm text-slate-300">Choose a new AquaNova password. Use at least 8 characters.</p>
       <FormMessage error={error}>{message || (!token ? 'Open the reset link from your email to continue.' : '')}</FormMessage>
       <form className="space-y-5" onSubmit={handleSubmit}>
-        <FormField autoComplete="new-password" label="New password" maxLength={1024} minLength={8} onChange={(event) => setPassword(event.target.value)} required type="password" value={password} />
-        <FormField autoComplete="new-password" label="Confirm new password" maxLength={1024} minLength={8} onChange={(event) => setConfirmPassword(event.target.value)} required type="password" value={confirmPassword} />
+        <PasswordField autoComplete="new-password" label="New password" maxLength={1024} minLength={8} onChange={(event) => setPassword(event.target.value)} required value={password} />
+        <PasswordField autoComplete="new-password" label="Confirm new password" maxLength={1024} minLength={8} onChange={(event) => setConfirmPassword(event.target.value)} required value={confirmPassword} />
         <SubmitButton disabled={busy || !token}>{busy ? 'Saving…' : 'Change password'}</SubmitButton>
       </form>
     </AuthLayout>

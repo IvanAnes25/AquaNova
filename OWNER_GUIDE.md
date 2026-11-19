@@ -7,13 +7,14 @@ Open the single **Orders** inbox. Tabs show **Needs action**, **Preparing**, **R
 - **GCash:** open the proof and compare the amount and reference. Approve only after confirming the payment. If it does not match, reject it with a clear reason so the customer can submit corrected proof.
 - **Cash on delivery:** confirm the cash order, prepare it, mark it ready/with the delivery person, then use **Delivered and paid** after handoff.
 - **Pickup cash:** confirm the order, prepare it, mark it ready, then use **Handed over and paid** when the customer collects.
-- Use the packing checklist and packing slip where available. Confirm that stock changes and order history are correct before moving to the next order.
+- Use **Next order** to move through the current tab. Once an order leaves that tab, the inbox selects another order automatically. Pickup orders show the pickup location, not a delivery address.
+- Confirm that stock changes and order history are correct before moving to the next order. There is no packing-slip or order-email generator in the current app.
 
 Order status and payment status are separate. GCash approval marks payment Paid, moves the order to Preparing, deducts stock once, records the stock movement, and notifies the customer.
 
 ## Products and inventory
 
-Use **Products** to add or edit catalog items. In **Inventory**, choose a product and record a positive restock or a reasoned adjustment. Check the movement history after saving; do not make manual database stock edits.
+Use **Products** to add catalog items and upload, replace, or remove a JPEG, PNG, or WebP product image. In **Inventory**, sold-out and lower-stock products appear first by default; choose a product, enter a required reason and optional note, and save the stock movement. Changes of 50 units or more require confirmation and are recorded in the large-change archive. Check the movement history after saving; do not make manual database stock edits.
 
 ## Settings and reports
 

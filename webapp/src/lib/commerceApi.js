@@ -41,8 +41,14 @@ export async function commerceGetAll(path, collections) {
   return result;
 }
 
-export function commerceRequest(path, method, body = {}) {
-  return authRequest(`${api}${path}`, method, body);
+export function commerceRequest(path, method, body = {}, key = createIdempotencyKey()) {
+  return authRequest(`${api}${path}`, method, body, { 'Idempotency-Key': key });
+}
+
+export function createIdempotencyKey() {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, '0')).join('')}`;
 }
 
 function reportQuery(period, date) {

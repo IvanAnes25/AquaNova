@@ -111,6 +111,18 @@ CREATE TABLE IF NOT EXISTS order_status_history (
     CONSTRAINT order_status_history_user_fk FOREIGN KEY (by_user_id) REFERENCES users (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS idempotency_requests (
+    user_id INT UNSIGNED NOT NULL,
+    scope VARCHAR(80) NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL,
+    PRIMARY KEY (user_id, scope, request_hash),
+    KEY idempotency_expiry_idx (expires_at),
+    CONSTRAINT idempotency_requests_user_fk
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 ALTER TABLE products
     ADD COLUMN category_id INT UNSIGNED NULL,
     ADD COLUMN slug VARCHAR(180) NULL,

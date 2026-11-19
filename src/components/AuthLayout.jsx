@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import logo from '../assets/nasugbu-aquatica-logo.png';
+import Icon from './Icon.jsx';
 import { routePath } from '../lib/paths.js';
 
 export default function AuthLayout({ title, children, footer, lightTheme = false }) {
@@ -25,6 +27,31 @@ export function FormField({ label, ...inputProps }) {
         className="auth-form-input w-full rounded-xl border border-slate-600 bg-slate-950 px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
         {...inputProps}
       />
+    </label>
+  );
+}
+
+export function PasswordField({ label, ...inputProps }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label className="block">
+      <span className="auth-form-label mb-1.5 block text-sm font-medium text-slate-200">{label}</span>
+      <span className="relative block">
+        <input
+          className="auth-form-input w-full rounded-xl border border-slate-600 bg-slate-950 px-4 py-3 pr-14 text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
+          {...inputProps}
+          type={visible ? 'text' : 'password'}
+        />
+        <button
+          aria-label={visible ? 'Hide password' : 'Show password'}
+          aria-pressed={visible}
+          className="absolute right-2 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-lg text-slate-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+          onClick={() => setVisible((current) => !current)}
+          type="button"
+        >
+          <Icon name={visible ? 'eyeOff' : 'eye'} className="h-5 w-5" />
+        </button>
+      </span>
     </label>
   );
 }

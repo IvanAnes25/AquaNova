@@ -1,6 +1,6 @@
 # Aquatica API
 
-All routes are same-origin PHP endpoints. JSON requests use `Content-Type: application/json`; state-changing requests require the session's CSRF token in `X-CSRF-Token`. Image uploads use multipart form data. IDs shown below are examples, not real records.
+All routes are same-origin PHP endpoints. JSON requests use `Content-Type: application/json`; state-changing requests require the session's CSRF token in `X-CSRF-Token`. Authenticated API responses use `Cache-Control: no-store, private`. Image uploads use multipart form data. IDs shown below are examples, not real records.
 
 ## Authentication routes
 
@@ -47,6 +47,8 @@ All routes are same-origin PHP endpoints. JSON requests use `Content-Type: appli
 | POST | `/api/v1/owner/orders/{id}/actions` | Owner |
 | GET, POST | `/api/v1/owner/products` | Owner |
 | PATCH | `/api/v1/owner/products/{id}` | Owner |
+| GET | `/api/v1/catalog/products/{idOrSlug}/image` | Public |
+| GET, POST, DELETE | `/api/v1/owner/products/{idOrSlug}/image` | Owner |
 | GET | `/api/v1/owner/inventory` | Owner |
 | POST | `/api/v1/owner/inventory/movements` | Owner |
 | GET | `/api/v1/owner/customers` | Owner |
@@ -97,6 +99,7 @@ Create an order from the server-side cart:
 POST /api/v1/orders
 Content-Type: application/json
 X-CSRF-Token: <session-token>
+Idempotency-Key: <unique-key-for-this-order-attempt>
 ```
 
 ```json
@@ -104,3 +107,13 @@ X-CSRF-Token: <session-token>
 ```
 
 Successful requests return JSON; errors use a 4xx/5xx status and a `message`. The commerce workflow, pagination, and report access contracts have local integration coverage; production deployment behavior remains unverified.
+
+### Idempotency and fulfillment wording
+
+The following writes require an `Idempotency-Key` header: order creation, customer order cancellation, payment-proof submission, owner order actions, product creation, stock movement, product-image upload, and product-image removal. Keys must be 16–128 ASCII letters, digits, `.`, `_`, `:`, or `-` and are scoped to the signed-in user.
+
+The key, endpoint, and canonical request payload are stored for up to 24 hours. A completed same-payload replay returns the original status code and body without repeating side effects and includes `Idempotent-Replay: true`. A different payload or endpoint returns `422`. A request already in progress returns `409` with `Retry-After: 1`. Definitive 4xx responses are stored so they can be replayed; 5xx responses remove the key and allow the retry to run again. The browser keeps keys for network errors and timeouts, clears them after success or definitive 4xx results, and releases its submission lock in `finally`.
+
+Stock movements require a non-empty reason. Changes of 50 units or more require `confirmedLargeChange: true` and are copied to `stock_change_archives`. Product images accept verified JPEG, PNG, or WebP uploads up to 2 MB, replace and remove the private stored file, and are served only through the catalog/owner image routes.
+
+Order-ready and completion messages are fulfillment-specific. Delivery orders use delivery/handoff language; pickup orders use “Ready for pickup,” “Picked up,” or “Handed over and paid” and omit delivery address/fee data. No packing-slip or order-email renderer is currently exposed by this API.

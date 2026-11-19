@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { money } from '../lib/format.js';
 import Icon from '../Icon.jsx';
 
@@ -10,16 +10,29 @@ export function ProductImage({ product, className = '' }) {
 }
 
 export default function ProductGrid({ products, onSelect, onAdd }) {
+  const [addingProduct, setAddingProduct] = useState(null);
+  const addingLock = useRef(false);
+  const addProduct = async (product) => {
+    if (addingLock.current) return;
+    addingLock.current = true;
+    setAddingProduct(product.id);
+    try {
+      await onAdd(product);
+    } finally {
+      addingLock.current = false;
+      setAddingProduct(null);
+    }
+  };
   return <div className="product-grid">{products.map((product) => <article className="product-card" key={product.id}>
     <button className="product-image-button" onClick={() => onSelect(product)}>
       <ProductImage product={product} /><span className="category-pill">{product.category}</span>
       {product.stock > 0 && product.stock <= 5 && <span className="low-stock-pill">! Low stock · {product.stock} left</span>}
-      {product.stock === 0 && <span className="sold-out-pill">Sold out</span>}
+      {product.stock === 0 && <span className="sold-out-pill">! Sold out</span>}
     </button>
     <div className="product-card-body">
       <button className="product-name" onClick={() => onSelect(product)}>{product.name}</button>
       <span className="product-size">{product.size}</span>
-      <div className="product-card-bottom"><b>{money(product.price)}</b><button className="add-button" aria-label={`Add ${product.name} to cart`} disabled={!product.stock} onClick={() => onAdd(product)}><Icon name="plus" size={17} /></button></div>
+      <div className="product-card-bottom"><b>{money(product.price)}</b><button className="add-button" aria-label={`Add ${product.name} to cart`} aria-busy={addingProduct === product.id || undefined} disabled={!product.stock || addingLock.current} onClick={() => addProduct(product)}>{addingProduct === product.id ? <span className="button-spinner" aria-hidden="true" /> : <Icon name="plus" size={17} />}</button></div>
     </div>
   </article>)}</div>;
 }

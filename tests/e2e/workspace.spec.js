@@ -88,6 +88,7 @@ async function api(page, path, method = 'GET', data = undefined) {
       const csrfResponse = await fetch('/api/auth/csrf.php');
       const csrf = await csrfResponse.json();
       headers['X-CSRF-Token'] = csrf.csrfToken;
+      headers['Idempotency-Key'] = crypto.randomUUID();
     }
     const response = await fetch(path, {
       method,
@@ -116,7 +117,7 @@ async function placeOrder(page, product, { fulfillment = 'Delivery', payment = '
   await page.getByRole('button', { name: 'Place order' }).click();
   await expect(page.getByRole('heading', {
     name: payment === 'GCash' ? 'Pay with GCash' : 'Order placed!',
-  })).toBeVisible();
+  })).toBeVisible({ timeout: 9_000 });
   const orders = await api(page, '/api/v1/orders');
   expect(orders.status).toBe(200);
   return orders.body.orders[0];
@@ -226,6 +227,33 @@ test('customer Shop, Cart, Orders, and Account remain usable at 390px with real 
   expect(order.paymentStatus).toBe('Unpaid');
 });
 
+test('Shop keeps every category visible and restores category/search filters from its URL', async ({ page }) => {
+  await signIn(page, fixture.users.customer);
+  await navigate(page, 'Shop');
+  const chips = page.locator('.shop-tools .category-tab');
+  await expect(chips.first()).toBeVisible();
+  const initialLabels = await chips.allTextContents();
+  expect(initialLabels.length).toBeGreaterThan(2);
+  const category = initialLabels.find((label) => label !== 'All items');
+  await chips.filter({ hasText: category }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get('category')).toBe(category);
+  await expect(chips).toHaveCount(initialLabels.length);
+  await expect(chips.filter({ hasText: category })).toHaveAttribute('aria-pressed', 'true');
+  await page.goBack();
+  await expect.poll(() => new URL(page.url()).searchParams.get('category')).toBeNull();
+  await expect(chips.first()).toHaveAttribute('aria-pressed', 'true');
+  await chips.filter({ hasText: category }).click();
+  await chips.filter({ hasText: category }).click();
+  await expect(page).not.toHaveURL(/category=/);
+
+  const search = page.getByPlaceholder('Search products...');
+  await search.fill(fixture.products.main.name);
+  await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe(fixture.products.main.name);
+  await page.reload();
+  await expect(page.getByPlaceholder('Search products...')).toHaveValue(fixture.products.main.name);
+  await expect(page.locator('.shop-tools .category-tab')).toHaveCount(initialLabels.length);
+});
+
 test('GCash proof rejection, duplicate reference, re-upload, approval, and next-order selection use the live API', async ({ page, browser }) => {
   test.setTimeout(90_000);
   await signIn(page, fixture.users.customer);
@@ -325,6 +353,8 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
   await signIn(page, fixture.users.customer);
   const short = fixture.products.short;
   await navigate(page, 'Shop');
+  runFixture('adjust-stock', fixture, short.id, 1);
+  await page.getByRole('button', { name: `Add ${short.name} to cart` }).click();
   await page.getByRole('button', { name: `Add ${short.name} to cart` }).click();
   runFixture('adjust-stock', fixture, short.id, -1);
   await navigate(page, 'Cart');
@@ -335,11 +365,28 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
   await page.getByRole('button', { name: 'Place order' }).click();
   await expect(page.locator('.toast')).toContainText(/stock/i);
   expect(inspect().orders).toHaveLength(0);
-  const cart = await api(page, '/api/v1/cart');
-  for (const item of cart.body.items) {
-    const removed = await api(page, `/api/v1/cart/items/${item.productId}`, 'PATCH', { quantity: 0 });
-    expect(removed.status).toBe(200);
-  }
+  await navigate(page, 'Cart');
+  await page.getByRole('button', { name: 'Decrease quantity' }).click();
+  await expect(page.locator('.quantity-control span')).toHaveText('1');
+  await page.getByRole('button', { name: 'Continue to checkout' }).click();
+  await page.getByRole('button', { name: /^Delivery/ }).click();
+  await page.getByLabel('Phone number').fill('09175550142');
+  await page.getByLabel('Delivery address').fill('42 Test Ocean Road');
+  await page.getByRole('button', { name: 'Cash on delivery' }).click();
+  const placeOrderButton = page.getByRole('button', { name: 'Place order' });
+  await expect(placeOrderButton).toBeEnabled({ timeout: 9_000 });
+  await placeOrderButton.dblclick();
+  await expect(page.getByRole('heading', { name: 'Order placed!' })).toBeVisible();
+  const recoveredOrder = (await api(page, '/api/v1/orders')).body.orders[0];
+  expect(recoveredOrder.items).toMatchObject([{ productId: String(short.id), quantity: 1 }]);
+  await navigate(page, 'My orders');
+  await page.getByRole('button', { name: 'View order' }).first().click();
+  await page.getByRole('button', { name: 'Cancel order' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel order' }).click();
+  expect(orderRecord(inspect(), recoveredOrder.databaseId)).toMatchObject({
+    order_status: 'cancelled',
+    stock_deducted: 0,
+  });
 
   const { context: ownerContext, page: ownerPage } = await newSignedInPage(browser, fixture.users.owner);
   try {
@@ -364,17 +411,97 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
     await ownerPage.getByLabel('Cancellation reason').fill('Owner cancellation test.');
     await ownerPage.getByRole('dialog').getByRole('button', { name: 'Cancel order' }).click();
 
+    await expect.poll(() => orderRecord(inspect(), ownerCancelled.databaseId), { timeout: 9_000 })
+      .toMatchObject({ order_status: 'cancelled', stock_deducted: 0 });
     const snapshot = inspect();
-    expect(orderRecord(snapshot, ownerCancelled.databaseId)).toMatchObject({
-      order_status: 'cancelled',
-      stock_deducted: 0,
-    });
     expect(snapshot.movements.filter((movement) => Number(movement.order_id) === ownerCancelled.databaseId).map((movement) => movement.type))
       .toEqual(['sale', 'cancellation']);
     expect(snapshot.stocks.main.stock).toBe(fixture.products.main.initialStock);
     expect(snapshot.stocks.main.stock).toBeGreaterThanOrEqual(0);
   } finally {
     await ownerContext.close();
+  }
+});
+
+test('dropped order response retries the same request and creates exactly one order', async ({ page }) => {
+  await signIn(page, fixture.users.customer);
+  await navigate(page, 'Shop');
+  await page.getByRole('button', { name: `Add ${fixture.products.main.name} to cart` }).click();
+  await navigate(page, 'Cart');
+  await page.getByRole('button', { name: 'Continue to checkout' }).click();
+  await page.getByRole('button', { name: /^Delivery/ }).click();
+  await page.getByLabel('Phone number').fill('09175550142');
+  await page.getByLabel('Delivery address').fill('42 Test Ocean Road');
+  await page.getByRole('button', { name: 'Cash on delivery' }).click();
+
+  let droppedOnce = true;
+  await page.route('**/api/v1/orders', async (route) => {
+    if (route.request().method() === 'POST' && droppedOnce) {
+      droppedOnce = false;
+      await route.fetch();
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+  const placeOrderButton = page.getByRole('button', { name: 'Place order' });
+  await expect(placeOrderButton).toBeEnabled();
+  await placeOrderButton.click();
+  await expect(page.locator('.toast')).toContainText(/authentication server|reach|response/i);
+  await page.unroute('**/api/v1/orders');
+
+  await placeOrderButton.click();
+  await expect(page.getByRole('heading', { name: 'Order placed!' })).toBeVisible({ timeout: 9_000 });
+  const orders = (await api(page, '/api/v1/orders')).body.orders;
+  expect(orders).toHaveLength(1);
+});
+
+test('owner records stock reasons and manages product images', async ({ page, browser }) => {
+  test.setTimeout(90_000);
+  await signIn(page, fixture.users.owner);
+  await navigate(page, 'Inventory');
+  await page.getByRole('button', { name: 'Restock' }).click();
+  await page.locator('.modal-form select').first().selectOption(String(fixture.products.main.slug));
+  await page.locator('.modal-form input[type="number"]').fill('5');
+  await page.locator('.modal-form input[placeholder="e.g. Supplier delivery"]').fill('Supplier delivery');
+  await page.locator('.modal-form input').last().fill('E2E stock batch');
+  await page.getByRole('button', { name: 'Save movement' }).click();
+  await expect(page.getByText('Supplier delivery')).toBeVisible();
+  const afterStock = inspect();
+  expect(afterStock.movements.filter((movement) => movement.reason === 'Supplier delivery: E2E stock batch'))
+    .toHaveLength(1);
+
+  await navigate(page, 'Products');
+  const productCard = page.locator('.owner-product-card').filter({ hasText: fixture.products.main.name });
+  await productCard.getByRole('button', { name: 'Upload image' }).click();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'product.png',
+    mimeType: 'image/png',
+    buffer: png,
+  });
+  await page.getByRole('dialog').getByRole('button', { name: 'Upload image' }).click();
+  await expect(productCard.getByRole('button', { name: 'Replace image' })).toBeVisible();
+  expect(inspect().stocks.main.imagePath).toBeTruthy();
+
+  await productCard.getByRole('button', { name: 'Replace image' }).click();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'product-replacement.png',
+    mimeType: 'image/png',
+    buffer: png,
+  });
+  await page.getByRole('dialog').getByRole('button', { name: 'Replace image' }).click();
+  await expect(productCard.getByRole('button', { name: 'Remove image' })).toBeVisible();
+
+  await productCard.getByRole('button', { name: 'Remove image' }).click();
+  await expect(productCard.getByRole('button', { name: 'Upload image' })).toBeVisible();
+  expect(inspect().stocks.main.imagePath).toBeNull();
+
+  const { context: customerContext, page: customerPage } = await newSignedInPage(browser, fixture.users.customer);
+  try {
+    await navigate(customerPage, 'Shop');
+    await expect(customerPage.getByText(fixture.products.main.name, { exact: true })).toBeVisible();
+  } finally {
+    await customerContext.close();
   }
 });
 

@@ -76,6 +76,7 @@ async function api(page, path, method = 'GET', data = undefined) {
       const csrfResponse = await fetch('/api/auth/csrf.php');
       const csrf = await csrfResponse.json();
       headers['X-CSRF-Token'] = csrf.csrfToken;
+      headers['Idempotency-Key'] = crypto.randomUUID();
     }
     const response = await fetch(path, {
       method,
@@ -185,6 +186,7 @@ test('real PHP API browser flows persist orders, stock, reports, and notificatio
 
     await ownerPage.reload();
     await navigate(ownerPage, 'Orders');
+    await selectOrder(ownerPage, first);
     await expect(ownerPage.locator('.order-inbox-detail h2')).toHaveText(first.id);
     await ownerPage.getByRole('button', { name: 'Check proof' }).click();
     await ownerPage.getByRole('dialog').getByRole('button', { name: 'Reject' }).click();
@@ -342,6 +344,17 @@ test('real PHP API browser flows persist orders, stock, reports, and notificatio
       expect(eventCount(fixture.users.customer.id, order.databaseId, 'Order ready')).toBe(1);
       expect(eventCount(fixture.users.customer.id, order.databaseId, 'Order completed')).toBe(1);
     }
+    const notificationBody = (order, title) => customerEvents.find((item) =>
+      Number(item.order_id) === order.databaseId && item.title === title)?.body;
+    expect(notificationBody(cod, 'Order ready')).toBe('Your order is out for delivery.');
+    expect(notificationBody(pickup, 'Order ready')).toBe('Your order is ready for pickup.');
+    expect(notificationBody(cod, 'Order completed')).toBe('Your order was delivered and paid.');
+    expect(notificationBody(pickup, 'Order completed')).toBe('Your order was handed over and paid at the shop.');
+    const completedOrders = await api(page, '/api/v1/orders');
+    expect(completedOrders.body.orders.find((order) => order.databaseId === pickup.databaseId))
+      .toMatchObject({ statusLabel: 'Handed over and paid', address: null });
+    expect(completedOrders.body.orders.find((order) => order.databaseId === cod.databaseId))
+      .toMatchObject({ statusLabel: 'Delivered and paid' });
     for (const order of [customerCancelled, ownerCancelled]) {
       expect(eventCount(fixture.users.customer.id, order.databaseId, 'Order cancelled')).toBe(1);
     }
