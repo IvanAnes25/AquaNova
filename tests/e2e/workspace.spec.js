@@ -151,6 +151,48 @@ async function saveScreenshot(page, name) {
   await page.screenshot({ path, fullPage: true });
 }
 
+test('login password eye, contrast, logout Back, and deep-link Back are accessible', async ({ page, browser }) => {
+  await page.goto('http://localhost/AquaNova/login');
+  const password = page.locator('input[autocomplete="current-password"]');
+  await expect(password).toHaveAttribute('type', 'password');
+  const eye = page.getByRole('button', { name: 'Show password' });
+  await eye.focus();
+  await page.keyboard.press('Space');
+  await expect(password).toHaveAttribute('type', 'text');
+  await expect(page.getByRole('button', { name: 'Hide password' })).toBeVisible();
+  await expect(page.locator('[aria-live="polite"]')).toContainText('Password is visible');
+
+  const linkContrast = await page.locator('.auth-form-link').evaluate((link) => {
+    const color = getComputedStyle(link).color;
+    const background = getComputedStyle(link.closest('.auth-layout')).backgroundColor;
+    const rgb = (value) => value.match(/\d+(?:\.\d+)?/g).slice(0, 3).map(Number);
+    const luminance = (values) => {
+      const channels = values.map((value) => {
+        const c = value / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const fg = rgb(color);
+    const bg = rgb(background);
+    const lighter = Math.max(luminance(fg), luminance(bg));
+    const darker = Math.min(luminance(fg), luminance(bg));
+    return (lighter + 0.05) / (darker + 0.05);
+  });
+  expect(linkContrast).toBeGreaterThanOrEqual(4.5);
+
+  await signIn(page, fixture.users.owner);
+  await page.goto('/webapp/?page=inventory');
+  await expect(page.getByRole('heading', { name: 'Inventory', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.locator('.sidebar .nav-link-active')).toContainText('Dashboard');
+  await page.getByRole('button', { name: 'Log out' }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.goBack();
+  await expect(page).not.toHaveURL(/page=(orders|inventory|dashboard|account|settings)/);
+});
+
 test('owner Orders and Reports render from live API data and period selection updates the URL', async ({ page }) => {
   await signIn(page, fixture.users.owner);
   await navigate(page, 'Orders');

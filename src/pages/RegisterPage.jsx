@@ -82,7 +82,7 @@ export default function RegisterPage() {
           required
           value={values.confirmPassword}
         />
-        <SubmitButton disabled={busy}>{busy ? 'Sending code…' : 'Create account'}</SubmitButton>
+        <SubmitButton busy={busy} disabled={busy}>{busy ? 'Sending code…' : 'Create account'}</SubmitButton>
       </form>
     </AuthLayout>
   );

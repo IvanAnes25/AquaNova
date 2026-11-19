@@ -31,7 +31,7 @@ export default function ForgotPasswordPage() {
       <FormMessage error={error}>{message}</FormMessage>
       <form className="space-y-5" onSubmit={handleSubmit}>
         <FormField autoComplete="email" label="Email" onChange={(event) => setEmail(event.target.value)} required type="email" value={email} />
-        <SubmitButton disabled={busy}>{busy ? 'Sending…' : 'Send reset link'}</SubmitButton>
+        <SubmitButton busy={busy} disabled={busy}>{busy ? 'Sending…' : 'Send reset link'}</SubmitButton>
       </form>
     </AuthLayout>
   );

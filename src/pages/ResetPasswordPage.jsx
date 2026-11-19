@@ -40,7 +40,7 @@ export default function ResetPasswordPage() {
       <form className="space-y-5" onSubmit={handleSubmit}>
         <PasswordField autoComplete="new-password" label="New password" maxLength={1024} minLength={8} onChange={(event) => setPassword(event.target.value)} required value={password} />
         <PasswordField autoComplete="new-password" label="Confirm new password" maxLength={1024} minLength={8} onChange={(event) => setConfirmPassword(event.target.value)} required value={confirmPassword} />
-        <SubmitButton disabled={busy || !token}>{busy ? 'Saving…' : 'Change password'}</SubmitButton>
+        <SubmitButton busy={busy} disabled={busy || !token}>{busy ? 'Saving…' : 'Change password'}</SubmitButton>
       </form>
     </AuthLayout>
   );

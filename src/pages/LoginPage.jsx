@@ -62,7 +62,7 @@ export default function LoginPage() {
         <div className="-mt-2 text-right">
           <a className="auth-form-link text-sm text-cyan-800 hover:text-cyan-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700" href={routePath('/forgot-password')}>Forgot password?</a>
         </div>
-        <SubmitButton disabled={busy}>{busy ? 'Logging in…' : 'Log in'}</SubmitButton>
+        <SubmitButton busy={busy} disabled={busy}>{busy ? 'Logging in…' : 'Log in'}</SubmitButton>
       </form>
     </AuthLayout>
   );

@@ -34,7 +34,7 @@ export function FormField({ label, ...inputProps }) {
 export function PasswordField({ label, ...inputProps }) {
   const [visible, setVisible] = useState(false);
   return (
-    <label className="block">
+    <label className="block" onMouseLeave={() => setVisible(false)} onBlur={() => setVisible(false)}>
       <span className="auth-form-label mb-1.5 block text-sm font-medium text-slate-200">{label}</span>
       <span className="relative block">
         <input
@@ -51,6 +51,9 @@ export function PasswordField({ label, ...inputProps }) {
         >
           <Icon name={visible ? 'eyeOff' : 'eye'} className="h-5 w-5" />
         </button>
+        <span className="sr-only" aria-live="polite" aria-atomic="true">
+          {visible ? 'Password is visible' : 'Password is hidden'}
+        </span>
       </span>
     </label>
   );
@@ -68,13 +71,15 @@ export function FormMessage({ children, error = false }) {
   );
 }
 
-export function SubmitButton({ children, disabled = false }) {
+export function SubmitButton({ children, disabled = false, busy = false }) {
   return (
     <button
       className="auth-submit-button w-full rounded-xl bg-cyan-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
       disabled={disabled}
+      aria-busy={busy || undefined}
       type="submit"
     >
+      {busy && <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-950/30 border-t-slate-950 align-middle" aria-hidden="true" />}
       {children}
     </button>
   );

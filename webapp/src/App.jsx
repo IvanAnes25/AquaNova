@@ -81,6 +81,7 @@ export default function App() {
   const [savingStock, setSavingStock] = useState(false);
   const productSaveLock = useRef(false);
   const stockSaveLock = useRef(false);
+  const logoutLock = useRef(false);
   const orderPlaceLock = useRef(false);
   const requestKeys = useRef(new Map());
   const pendingCartUpdate = useRef(null);
@@ -613,6 +614,8 @@ export default function App() {
     }
   });
   const logout = async () => {
+    if (logoutLock.current) return;
+    logoutLock.current = true;
     try {
       await authPost('/api/auth/logout.php');
       clearSession();
@@ -620,6 +623,8 @@ export default function App() {
       setToast('');
     } catch (error) {
       notify(error.message);
+    } finally {
+      logoutLock.current = false;
     }
   };
   const pageProps = {
@@ -672,7 +677,7 @@ export default function App() {
 
   return <div className={`app-shell ${mobileMenu ? 'mobile-nav-open' : ''}`}>
     <Sidebar role={role} page={page} user={user} onNavigate={navigate} cartCount={cartCount} pendingCount={pendingCount} mobileMenu={mobileMenu} onClose={() => setMobileMenu(false)} onLogout={logout} />
-    <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button>{['cart', 'checkout', 'payment', 'order-detail', 'notifications', 'account'].includes(page) && <button className="app-back-button" onClick={goBack}><Icon name="back" size={16} /> Back</button>}<div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
+    <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button>{['cart', 'checkout', 'payment', 'order-detail', 'notifications', 'account', 'orders', 'products', 'inventory', 'settings'].includes(page) && <button className="app-back-button" onClick={goBack}><Icon name="back" size={16} /> Back</button>}<div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
       <div className="topbar-actions"><span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" onClick={() => navigate(page === 'notifications' ? (role === 'owner' ? 'dashboard' : 'home') : 'notifications')}><Icon name="bell" size={18} />{unreadNotifications > 0 && <i />}</button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
     </header><div className="content-area">{selectedProduct ? <ProductDetails product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={addToCart} /> : content}</div>
     <footer className="app-footer"><span>© 2026 Aquatica Nasugbu</span><span>Made for little pieces of the ocean <i>✳</i></span></footer></main>
