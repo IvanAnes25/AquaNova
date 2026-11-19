@@ -2,16 +2,22 @@
 
 declare(strict_types=1);
 
-require_once dirname(__DIR__) . '/database/connection.php';
+require_once __DIR__ . '/isolated_test_database.php';
 
-if (PHP_SAPI !== 'cli' || !database_is_local() || !extension_loaded('curl')) {
-    fwrite(STDERR, "API security tests require local CLI, PDO MySQL, and cURL.\n");
+if (!extension_loaded('curl')) {
+    fwrite(STDERR, "API security tests require cURL.\n");
     exit(1);
 }
 
+$testDatabase = getenv('AQUATICA_TEST_DB_NAME');
+$pdo = isolated_test_database_connection();
+if (!is_string($testDatabase)) {
+    fwrite(STDERR, "API security tests require an isolated test database.\n");
+    exit(1);
+}
 $config = require dirname(__DIR__) . '/private/auth.php';
-$baseUrl = rtrim(getenv('AQUATICA_TEST_BASE_URL') ?: 'http://127.0.0.1/AquaNova', '/');
-$pdo = database_connection();
+$baseUrl = rtrim((string) getenv('AQUATICA_TEST_BASE_URL'), '/');
+verify_isolated_api_test_router($baseUrl, $testDatabase);
 $tag = bin2hex(random_bytes(5));
 $password = bin2hex(random_bytes(18));
 $cookieFiles = [];
@@ -28,6 +34,7 @@ $lowStockNotificationIdsBefore = [];
 $productId = 0;
 $oldStock = null;
 $oldThreshold = null;
+$testMovementStartId = null;
 $stockTestNote = '';
 $assertions = 0;
 
@@ -257,6 +264,9 @@ try {
     $productId = (int) $selectedProduct['id'];
     $oldStock = (int) $selectedProduct['stock'];
     $oldThreshold = (int) $selectedProduct['low_stock_threshold'];
+    $movementBaseline = $pdo->prepare('SELECT COALESCE(MAX(id), 0) FROM stock_movements WHERE product_id = :id');
+    $movementBaseline->execute(['id' => $productId]);
+    $testMovementStartId = (int) $movementBaseline->fetchColumn();
     $stockTestNote = 'API test threshold ' . $tag;
     $existingLowStock = $pdo->prepare(
         "SELECT id FROM notifications WHERE title = 'Low stock' AND body LIKE :product"
@@ -1241,11 +1251,12 @@ try {
         $pdo->prepare('UPDATE products SET stock = :stock, low_stock_threshold = :threshold WHERE id = :id')
             ->execute(['stock' => $oldStock, 'threshold' => $oldThreshold, 'id' => $productId]);
     }
-    if ($productId) {
+    if ($productId && $testMovementStartId !== null) {
         $bulkMovementIds = $pdo->prepare(
-            'SELECT movement_id FROM stock_change_archives WHERE product_id = :product_id'
+            'SELECT movement_id FROM stock_change_archives
+             WHERE product_id = :product_id AND movement_id > :start_id'
         );
-        $bulkMovementIds->execute(['product_id' => $productId]);
+        $bulkMovementIds->execute(['product_id' => $productId, 'start_id' => $testMovementStartId ?? 0]);
         $bulkIds = array_map('intval', $bulkMovementIds->fetchAll(PDO::FETCH_COLUMN));
         if ($bulkIds) {
             $placeholders = implode(',', array_fill(0, count($bulkIds), '?'));
@@ -1286,6 +1297,10 @@ try {
         $pdo->prepare('DELETE FROM payment_proofs WHERE order_id = :id')->execute(['id' => $orderId]);
         $pdo->prepare('DELETE FROM order_items WHERE order_id = :id')->execute(['id' => $orderId]);
         $pdo->prepare('DELETE FROM orders WHERE id = :id')->execute(['id' => $orderId]);
+    }
+    if ($productId && $testMovementStartId !== null) {
+        $pdo->prepare('DELETE FROM stock_movements WHERE product_id = :id AND id > :start_id')
+            ->execute(['id' => $productId, 'start_id' => $testMovementStartId]);
     }
     foreach ($createdProductIds as $createdProductId) {
         $pdo->prepare('DELETE FROM audit_log WHERE entity = "product" AND entity_id = :id')->execute([

@@ -2,12 +2,7 @@
 
 declare(strict_types=1);
 
-require_once dirname(__DIR__) . '/database/connection.php';
-
-if (PHP_SAPI !== 'cli' || !database_is_local()) {
-    fwrite(STDERR, "Commerce schema tests may only run from a local CLI environment.\n");
-    exit(1);
-}
+require_once __DIR__ . '/isolated_test_database.php';
 
 $assertions = 0;
 $assert = static function (bool $condition, string $message) use (&$assertions): void {
@@ -18,7 +13,7 @@ $assert = static function (bool $condition, string $message) use (&$assertions):
 };
 
 try {
-    $pdo = database_connection();
+    $pdo = isolated_test_database_connection();
     $migration = $pdo->prepare('SELECT COUNT(*) FROM schema_migrations WHERE migration = :migration');
     $migration->execute(['migration' => '20261111_commerce']);
     $assert((int) $migration->fetchColumn() === 1, 'Commerce migration is not recorded as applied.');

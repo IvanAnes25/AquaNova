@@ -101,3 +101,10 @@ export function SkeletonList({ count = 4, className = '' }) {
     ))}
   </div>;
 }
+
+export function SkeletonRoute() {
+  return <div className="route-skeleton" role="status" aria-label="Loading page">
+    <div className="route-skeleton-title skeleton-shimmer" />
+    <div className="panel route-skeleton-panel"><SkeletonList count={5} /></div>
+  </div>;
+}

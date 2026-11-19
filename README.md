@@ -52,11 +52,33 @@ Copy `.env.example` to `.env` and set the database values, or use the existing `
 ```powershell
 php scripts\migrate.php up
 php database\seed.php
-php tests\commerce_schema_test.php
-php tests\commerce_auto_cancel_test.php
 ```
 
 The migration command is repeatable. `php scripts\migrate.php down` performs a guarded rollback: it refuses to remove tables or user fields containing data. Run the development seed only against a local database; it inserts enough sample products to bring the catalog to at least 20, reconciles opening stock movements, and creates two Argon2id-hashed `.test` customer accounts. Their random temporary passwords are printed only when each account is first created. Do not use the development seed on production.
+
+Database-backed tests fail closed unless `DB_NAME` and `AQUATICA_TEST_DB_NAME` both name the same `aquanova_test_*` database. Initialize that separate database with the schemas, migrations, and seed above, then set the variables in PowerShell before running tests:
+
+```powershell
+$env:DB_NAME = 'aquanova_test_local_01'
+$env:AQUATICA_TEST_DB_NAME = $env:DB_NAME
+$env:APP_ENV = 'local'
+php tests\commerce_schema_test.php
+php tests\commerce_auto_cancel_test.php
+php tests\commerce_reports_test.php
+```
+
+Use a unique database name in place of `aquanova_test_local_01`. The API and registration suites also require the guarded test router. In a separate PowerShell terminal, set the same database variables (and the SMTP settings for registration tests), then run:
+
+```powershell
+$env:DB_NAME = 'aquanova_test_local_01'
+$env:AQUATICA_TEST_DB_NAME = $env:DB_NAME
+$env:APP_ENV = 'local'
+$env:AQUATICA_TEST_MAIL_HOST = '127.0.0.1'
+$env:AQUATICA_TEST_MAIL_PORT = '2526'
+php -S 127.0.0.1:8091 tests\api_test_router.php
+```
+
+In the test terminal, set `AQUATICA_TEST_BASE_URL` to `http://127.0.0.1:8091/AquaNova` and run the API or registration suite. The router preflight rejects a mismatched database before the suite makes API requests.
 
 Use an SMTP mailbox or provider with SMTP credentials and TLS. For example, enter the provider's host, port, username, password, and TLS mode in the ignored `private/auth.php` file. Configure a real sender mailbox; the site never signs in to a user's email account.
 

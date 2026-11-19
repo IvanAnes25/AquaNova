@@ -58,6 +58,8 @@ if ($action === 'setup') {
         ]);
         $users[$key] = ['id' => (int) $pdo->lastInsertId(), 'email' => $email, 'password' => $password, 'role' => $role];
     }
+    $pdo->prepare('INSERT INTO notifications (user_id, order_id, title, body) VALUES (?, NULL, ?, ?)')
+        ->execute([$users['customer']['id'], 'E2E notification', 'Notification action test fixture.']);
 
     $category = $pdo->query('SELECT id, name FROM categories ORDER BY id LIMIT 1')->fetch(PDO::FETCH_ASSOC);
     if (!$category) {
@@ -125,6 +127,7 @@ if ($action === 'setup') {
         'qrRelative' => $qrRelative,
         'reportDate' => $date,
         'database' => $testDatabase,
+        'createdProductNames' => [],
     ]);
 }
 
@@ -268,6 +271,20 @@ if ($action === 'cleanup') {
             }
             $pdo->prepare('DELETE FROM stock_movements WHERE product_id = ?')->execute([(int) $product['id']]);
             $pdo->prepare('DELETE FROM products WHERE id = ? AND slug = ?')->execute([(int) $product['id'], $product['slug']]);
+        }
+        foreach ($fixture['createdProductNames'] ?? [] as $productName) {
+            $expectedPrefix = 'E2E Created Product ' . (string) ($fixture['tag'] ?? '') . ' ';
+            if (!is_string($productName) || !str_starts_with($productName, $expectedPrefix)) {
+                throw new RuntimeException('Cleanup payload contains an out-of-scope product.');
+            }
+            $productQuery = $pdo->prepare('SELECT id FROM products WHERE name = ?');
+            $productQuery->execute([$productName]);
+            $productId = $productQuery->fetchColumn();
+            if ($productId !== false) {
+                $pdo->prepare('DELETE FROM cart_items WHERE product_id = ?')->execute([(int) $productId]);
+                $pdo->prepare('DELETE FROM stock_movements WHERE product_id = ?')->execute([(int) $productId]);
+                $pdo->prepare('DELETE FROM products WHERE id = ?')->execute([(int) $productId]);
+            }
         }
         foreach ($fixture['users'] as $user) {
             $pdo->prepare('DELETE FROM users WHERE id = ? AND email = ? AND role = ?')

@@ -2,19 +2,12 @@
 
 declare(strict_types=1);
 
-require_once dirname(__DIR__) . '/database/connection.php';
+require_once __DIR__ . '/isolated_test_database.php';
 
-if (PHP_SAPI !== 'cli' || !database_is_local()) {
-    fwrite(STDERR, "Commerce reports tests may only run from a local CLI environment.\n");
-    exit(1);
-}
+$pdo = isolated_test_database_connection();
 
 require_once dirname(__DIR__) . '/api/bootstrap.php';
 require_once dirname(__DIR__) . '/api/v1/CommerceController.php';
-
-if (getenv('DB_NAME') !== false) {
-    $authConfig['database']['name'] = getenv('DB_NAME');
-}
 
 $assertions = 0;
 $assert = static function (bool $condition, string $message) use (&$assertions): void {
@@ -24,7 +17,6 @@ $assert = static function (bool $condition, string $message) use (&$assertions):
     }
 };
 
-$pdo = database_connection();
 $tag = strtoupper(bin2hex(random_bytes(4)));
 $userId = 0;
 $orderIds = [];

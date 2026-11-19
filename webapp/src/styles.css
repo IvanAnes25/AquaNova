@@ -1138,6 +1138,19 @@ textarea::placeholder { color: var(--placeholder); opacity: 1; }
   animation: skeleton-shimmer 1.2s infinite;
   z-index: 9999;
 }
+.route-skeleton {
+  display: grid;
+  gap: 20px;
+}
+.route-skeleton-title {
+  width: min(260px, 60%);
+  height: 32px;
+  border-radius: 7px;
+}
+.route-skeleton-panel {
+  min-height: 300px;
+  padding: 8px;
+}
 @media (max-width: 1170px) {
   .reports-row-primary, .reports-row-bottom { grid-template-columns: minmax(0, 1.35fr) minmax(250px, 1fr); }
 }

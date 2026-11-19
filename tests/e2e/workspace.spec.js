@@ -100,9 +100,40 @@ async function api(page, path, method = 'GET', data = undefined) {
   }, { path, method, data });
 }
 
+async function doubleClickOnce(page, button, method, pathPattern) {
+  let requestCount = 0;
+  const routePattern = '**/api/v1/**';
+  const onRoute = async (route) => {
+    const request = route.request();
+    if (request.method() !== method || !pathPattern.test(new URL(request.url()).pathname)) {
+      await route.fallback();
+      return;
+    }
+    requestCount++;
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await route.fulfill({ response });
+  };
+  await page.route(routePattern, onRoute);
+  try {
+    const response = page.waitForResponse((candidate) =>
+      candidate.request().method() === method
+      && pathPattern.test(new URL(candidate.url()).pathname));
+    await button.dblclick();
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveAttribute('aria-busy', 'true');
+    await expect(button.locator('.button-spinner')).toBeVisible();
+    await response;
+    await page.waitForTimeout(250);
+    expect(requestCount).toBe(1);
+  } finally {
+    if (!page.isClosed()) await page.unroute(routePattern, onRoute);
+  }
+}
+
 async function placeOrder(page, product, { fulfillment = 'Delivery', payment = 'GCash' } = {}) {
   await navigate(page, 'Shop');
-  await page.getByRole('button', { name: `Add ${product.name} to cart` }).click();
+  await doubleClickOnce(page, page.getByRole('button', { name: `Add ${product.name} to cart` }), 'POST', /\/api\/v1\/cart\/items$/);
   await navigate(page, 'Cart');
   await page.getByRole('button', { name: 'Continue to checkout' }).click();
   if (fulfillment === 'Pickup') {
@@ -114,7 +145,7 @@ async function placeOrder(page, product, { fulfillment = 'Delivery', payment = '
   const option = payment === 'GCash' ? 'GCash'
     : payment === 'COD' ? 'Cash on delivery' : 'Cash at the shop';
   await page.getByRole('button', { name: option }).click();
-  await page.getByRole('button', { name: 'Place order' }).click();
+  await doubleClickOnce(page, page.getByRole('button', { name: 'Place order' }), 'POST', /\/api\/v1\/orders$/);
   await expect(page.getByRole('heading', {
     name: payment === 'GCash' ? 'Pay with GCash' : 'Order placed!',
   })).toBeVisible({ timeout: 9_000 });
@@ -130,7 +161,7 @@ async function submitProof(page, reference) {
     mimeType: 'image/png',
     buffer: png,
   });
-  await page.getByRole('button', { name: 'Submit payment proof' }).click();
+  await doubleClickOnce(page, page.getByRole('button', { name: 'Upload payment proof' }), 'POST', /\/api\/v1\/orders\/\d+\/payment-proof$/);
 }
 
 async function selectOrder(page, order) {
@@ -195,7 +226,15 @@ test('login password eye, contrast, logout Back, and deep-link Back are accessib
 
 test('owner Orders and Reports render from live API data and period selection updates the URL', async ({ page }) => {
   await signIn(page, fixture.users.owner);
-  await navigate(page, 'Orders');
+  const delayedVerification = async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await route.continue();
+  };
+  await page.route('**/api/auth/owner-page.php', delayedVerification);
+  await page.locator('.sidebar .nav-link').filter({ hasText: /^Orders/ }).click();
+  await expect(page.getByRole('status', { name: 'Loading page' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Orders', exact: true })).toBeVisible();
+  await page.unroute('**/api/auth/owner-page.php', delayedVerification);
   for (const tab of ['Needs action', 'Preparing', 'Ready', 'Completed', 'Cancelled']) {
     await expect(page.getByRole('tab', { name: new RegExp(tab) })).toBeVisible();
   }
@@ -315,11 +354,14 @@ test('GCash proof rejection, duplicate reference, re-upload, approval, and next-
     await ownerPage.getByRole('button', { name: 'Check proof' }).click();
     await ownerPage.getByRole('dialog').getByRole('button', { name: 'Reject' }).click();
     await ownerPage.getByLabel('Reason for rejection').fill('Reference is not readable.');
-    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Reject payment proof' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('dialog').getByRole('button', { name: 'Reject payment proof' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
 
     await page.reload();
     await navigate(page, 'My orders');
     await expect(page.getByText('Payment update needed: Reference is not readable.')).toBeVisible();
+    await page.getByRole('button', { name: 'Notifications' }).click();
+    await doubleClickOnce(page, page.getByRole('button', { name: 'Mark read' }).first(), 'PATCH', /\/api\/v1\/notifications\/\d+\/read$/);
+    await navigate(page, 'My orders');
     await page.getByRole('button', { name: 'Upload proof' }).first().click();
     await submitProof(page, `E2E${fixture.tag}A1`);
     await expect(page.locator('.inline-error')).toContainText('already been used');
@@ -330,7 +372,7 @@ test('GCash proof rejection, duplicate reference, re-upload, approval, and next-
     await navigate(ownerPage, 'Orders');
     await selectOrder(ownerPage, first);
     await ownerPage.getByRole('button', { name: 'Check proof' }).click();
-    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Approve' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('dialog').getByRole('button', { name: 'Approve' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
     await expect(ownerPage.locator('.order-inbox-detail h2')).toHaveText(second.id);
     const snapshot = inspect();
     expect(orderRecord(snapshot, first.databaseId)).toMatchObject({
@@ -355,25 +397,33 @@ test('COD delivery and pickup cash reach their paid completion actions through t
     await ownerPage.reload();
     await navigate(ownerPage, 'Orders');
     await selectOrder(ownerPage, delivery);
-    await ownerPage.getByRole('button', { name: 'Confirm order' }).click();
+    const delayOrders = async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.fallback();
+    };
+    await ownerPage.route('**/api/v1/owner/orders**', delayOrders);
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('button', { name: 'Confirm order' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
+    await expect(ownerPage.locator('.orders-inbox-list').getByLabel('Loading list')).toBeVisible();
+    await ownerPage.unroute('**/api/v1/owner/orders**', delayOrders);
+    await expect(ownerPage.locator('.orders-inbox-list').getByLabel('Loading list')).toHaveCount(0);
     await ownerPage.getByRole('tab', { name: /Preparing/ }).click();
     await selectOrder(ownerPage, delivery);
-    await ownerPage.getByRole('button', { name: 'Mark as ready' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('button', { name: 'Mark as ready' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
     await ownerPage.getByRole('tab', { name: /Ready/ }).click();
     await selectOrder(ownerPage, delivery);
-    await ownerPage.getByRole('button', { name: 'Delivered and paid' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('button', { name: 'Delivered and paid' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
 
     const pickup = await placeOrder(page, fixture.products.main, { payment: 'cash', fulfillment: 'Pickup' });
     await ownerPage.reload();
     await navigate(ownerPage, 'Orders');
     await selectOrder(ownerPage, pickup);
-    await ownerPage.getByRole('button', { name: 'Confirm order' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('button', { name: 'Confirm order' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
     await ownerPage.getByRole('tab', { name: /Preparing/ }).click();
     await selectOrder(ownerPage, pickup);
-    await ownerPage.getByRole('button', { name: 'Mark as ready' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('button', { name: 'Mark as ready' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
     await ownerPage.getByRole('tab', { name: /Ready/ }).click();
     await selectOrder(ownerPage, pickup);
-    await ownerPage.getByRole('button', { name: 'Handed over and paid' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('button', { name: 'Handed over and paid' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
 
     const snapshot = inspect();
     for (const order of [delivery, pickup]) {
@@ -396,15 +446,15 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
   const short = fixture.products.short;
   await navigate(page, 'Shop');
   runFixture('adjust-stock', fixture, short.id, 1);
-  await page.getByRole('button', { name: `Add ${short.name} to cart` }).click();
-  await page.getByRole('button', { name: `Add ${short.name} to cart` }).click();
+  await doubleClickOnce(page, page.getByRole('button', { name: `Add ${short.name} to cart` }), 'POST', /\/api\/v1\/cart\/items$/);
+  await doubleClickOnce(page, page.getByRole('button', { name: `Add ${short.name} to cart` }), 'POST', /\/api\/v1\/cart\/items$/);
   runFixture('adjust-stock', fixture, short.id, -1);
   await navigate(page, 'Cart');
   await page.getByRole('button', { name: 'Continue to checkout' }).click();
   await page.getByRole('button', { name: /^Delivery/ }).click();
   await page.getByLabel('Delivery address').fill('42 Test Ocean Road');
   await page.getByRole('button', { name: 'Cash on delivery' }).click();
-  await page.getByRole('button', { name: 'Place order' }).click();
+  await doubleClickOnce(page, page.getByRole('button', { name: 'Place order' }), 'POST', /\/api\/v1\/orders$/);
   await expect(page.locator('.toast')).toContainText(/stock/i);
   expect(inspect().orders).toHaveLength(0);
   await navigate(page, 'Cart');
@@ -417,14 +467,14 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
   await page.getByRole('button', { name: 'Cash on delivery' }).click();
   const placeOrderButton = page.getByRole('button', { name: 'Place order' });
   await expect(placeOrderButton).toBeEnabled({ timeout: 9_000 });
-  await placeOrderButton.dblclick();
+  await doubleClickOnce(page, placeOrderButton, 'POST', /\/api\/v1\/orders$/);
   await expect(page.getByRole('heading', { name: 'Order placed!' })).toBeVisible();
   const recoveredOrder = (await api(page, '/api/v1/orders')).body.orders[0];
   expect(recoveredOrder.items).toMatchObject([{ productId: String(short.id), quantity: 1 }]);
   await navigate(page, 'My orders');
   await page.getByRole('button', { name: 'View order' }).first().click();
   await page.getByRole('button', { name: 'Cancel order' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Cancel order' }).click();
+  await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Cancel order' }), 'POST', /\/api\/v1\/orders\/\d+\/cancel$/);
   expect(orderRecord(inspect(), recoveredOrder.databaseId)).toMatchObject({
     order_status: 'cancelled',
     stock_deducted: 0,
@@ -436,7 +486,7 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
     await navigate(page, 'My orders');
     await page.getByRole('button', { name: 'View order' }).first().click();
     await page.getByRole('button', { name: 'Cancel order' }).click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Cancel order' }).click();
+    await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Cancel order' }), 'POST', /\/api\/v1\/orders\/\d+\/cancel$/);
     expect(orderRecord(inspect(), customerCancelled.databaseId)).toMatchObject({
       order_status: 'cancelled',
       stock_deducted: 0,
@@ -446,12 +496,12 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
     await ownerPage.reload();
     await navigate(ownerPage, 'Orders');
     await selectOrder(ownerPage, ownerCancelled);
-    await ownerPage.getByRole('button', { name: 'Confirm order' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('button', { name: 'Confirm order' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
     await ownerPage.getByRole('tab', { name: /Preparing/ }).click();
     await selectOrder(ownerPage, ownerCancelled);
     await ownerPage.getByRole('button', { name: 'Cancel order' }).click();
     await ownerPage.getByLabel('Cancellation reason').fill('Owner cancellation test.');
-    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Cancel order' }).click();
+    await doubleClickOnce(ownerPage, ownerPage.getByRole('dialog').getByRole('button', { name: 'Cancel order' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
 
     await expect.poll(() => orderRecord(inspect(), ownerCancelled.databaseId), { timeout: 9_000 })
       .toMatchObject({ order_status: 'cancelled', stock_deducted: 0 });
@@ -463,6 +513,11 @@ test('short stock blocks checkout and customer and owner cancellations preserve 
   } finally {
     await ownerContext.close();
   }
+  await navigate(page, 'Shop');
+  await doubleClickOnce(page, page.getByRole('button', { name: `Add ${fixture.products.main.name} to cart` }), 'POST', /\/api\/v1\/cart\/items$/);
+  await navigate(page, 'Cart');
+  await doubleClickOnce(page, page.getByRole('button', { name: `Delete ${fixture.products.main.name} from cart` }), 'PATCH', /\/api\/v1\/cart\/items\/[^/]+$/);
+  await expect(page.getByRole('heading', { name: 'Your cart is waiting' })).toBeVisible();
 });
 
 test('dropped order response retries the same request and creates exactly one order', async ({ page }) => {
@@ -492,7 +547,7 @@ test('dropped order response retries the same request and creates exactly one or
   await expect(page.locator('.toast')).toContainText(/authentication server|reach|response/i);
   await page.unroute('**/api/v1/orders');
 
-  await placeOrderButton.click();
+  await page.getByRole('button', { name: 'Retry' }).click();
   await expect(page.getByRole('heading', { name: 'Order placed!' })).toBeVisible({ timeout: 9_000 });
   const orders = (await api(page, '/api/v1/orders')).body.orders;
   expect(orders).toHaveLength(1);
@@ -507,13 +562,33 @@ test('owner records stock reasons and manages product images', async ({ page, br
   await page.locator('.modal-form input[type="number"]').fill('5');
   await page.locator('.modal-form input[placeholder="e.g. Supplier delivery"]').fill('Supplier delivery');
   await page.locator('.modal-form input').last().fill('E2E stock batch');
-  await page.getByRole('button', { name: 'Save movement' }).click();
+  await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Restock' }), 'POST', /\/api\/v1\/owner\/inventory\/movements$/);
   await expect(page.getByText('Supplier delivery')).toBeVisible();
   const afterStock = inspect();
   expect(afterStock.movements.filter((movement) => movement.reason === 'Supplier delivery: E2E stock batch'))
     .toHaveLength(1);
 
+  await page.getByRole('button', { name: 'Adjust stock' }).click();
+  await page.locator('.modal-form select').first().selectOption(String(fixture.products.main.slug));
+  await page.locator('.modal-form select').nth(1).selectOption('Adjustment');
+  await page.locator('.modal-form input[type="number"]').fill('1');
+  await page.locator('.modal-form input[placeholder="e.g. Supplier delivery"]').fill('E2E adjustment');
+  await page.locator('.modal-form input').last().fill('double-click coverage');
+  await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Adjust stock' }), 'POST', /\/api\/v1\/owner\/inventory\/movements$/);
+  expect(inspect().movements.filter((movement) => movement.reason === 'E2E adjustment: double-click coverage'))
+    .toHaveLength(1);
+
   await navigate(page, 'Products');
+  const createdProductName = `E2E Created Product ${fixture.tag} Double click`;
+  fixture.createdProductNames.push(createdProductName);
+  await page.getByRole('button', { name: 'Add product' }).click();
+  const createProductDialog = page.getByRole('dialog');
+  await createProductDialog.getByLabel('Product name').fill(createdProductName);
+  await createProductDialog.getByLabel('Price (₱)').fill('10');
+  await createProductDialog.getByLabel('Opening stock').fill('2');
+  await doubleClickOnce(page, createProductDialog.getByRole('button', { name: 'Create product' }), 'POST', /\/api\/v1\/owner\/products$/);
+  await expect(page.locator('.owner-product-card').filter({ hasText: createdProductName })).toHaveCount(1);
+
   const productCard = page.locator('.owner-product-card').filter({ hasText: fixture.products.main.name });
   await productCard.getByRole('button', { name: 'Upload image' }).click();
   await page.locator('input[type="file"]').setInputFiles({
@@ -521,7 +596,7 @@ test('owner records stock reasons and manages product images', async ({ page, br
     mimeType: 'image/png',
     buffer: png,
   });
-  await page.getByRole('dialog').getByRole('button', { name: 'Upload image' }).click();
+  await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Save image' }), 'POST', /\/api\/v1\/owner\/products\/[^/]+\/image$/);
   await expect(productCard.getByRole('button', { name: 'Replace image' })).toBeVisible();
   expect(inspect().stocks.main.imagePath).toBeTruthy();
 
@@ -531,12 +606,16 @@ test('owner records stock reasons and manages product images', async ({ page, br
     mimeType: 'image/png',
     buffer: png,
   });
-  await page.getByRole('dialog').getByRole('button', { name: 'Replace image' }).click();
-  await expect(productCard.getByRole('button', { name: 'Remove image' })).toBeVisible();
+  await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Save image' }), 'POST', /\/api\/v1\/owner\/products\/[^/]+\/image$/);
+  await expect(productCard.getByRole('button', { name: 'Delete image' })).toBeVisible();
 
-  await productCard.getByRole('button', { name: 'Remove image' }).click();
+  await doubleClickOnce(page, productCard.getByRole('button', { name: 'Delete image' }), 'DELETE', /\/api\/v1\/owner\/products\/[^/]+\/image$/);
   await expect(productCard.getByRole('button', { name: 'Upload image' })).toBeVisible();
   expect(inspect().stocks.main.imagePath).toBeNull();
+
+  await navigate(page, 'Settings');
+  await doubleClickOnce(page, page.getByRole('button', { name: 'Save settings' }), 'PATCH', /\/api\/v1\/owner\/settings$/);
+  await expect(page.locator('.toast')).toContainText('Settings saved.');
 
   const { context: customerContext, page: customerPage } = await newSignedInPage(browser, fixture.users.customer);
   try {

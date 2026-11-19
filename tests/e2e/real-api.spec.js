@@ -121,7 +121,7 @@ async function submitProof(page, order, reference) {
     mimeType: 'image/png',
     buffer: png,
   });
-  await page.getByRole('button', { name: 'Submit payment proof' }).click();
+  await page.getByRole('button', { name: 'Upload payment proof' }).click();
 }
 
 async function selectOrder(page, order) {

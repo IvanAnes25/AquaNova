@@ -2,22 +2,19 @@
 
 declare(strict_types=1);
 
-require_once dirname(__DIR__) . '/database/connection.php';
+require_once __DIR__ . '/isolated_test_database.php';
 
-if (PHP_SAPI !== 'cli' || !extension_loaded('curl')) {
-    fwrite(STDERR, "Registration verification test requires local CLI and cURL.\n");
+if (!extension_loaded('curl')) {
+    fwrite(STDERR, "Registration verification test requires cURL.\n");
     exit(1);
 }
 
+$pdo = isolated_test_database_connection();
+$testDatabase = (string) getenv('AQUATICA_TEST_DB_NAME');
 $config = require dirname(__DIR__) . '/private/auth.php';
-$baseUrl = rtrim(getenv('AQUATICA_TEST_BASE_URL') ?: 'http://127.0.0.1:8091/AquaNova', '/');
+$baseUrl = rtrim((string) getenv('AQUATICA_TEST_BASE_URL'), '/');
+verify_isolated_api_test_router($baseUrl, $testDatabase);
 $port = 2526;
-$pdo = database_connection();
-$databaseName = (string) $pdo->query('SELECT DATABASE()')->fetchColumn();
-if (($config['environment'] ?? '') !== 'local' || !preg_match('/^aquanova_test_[a-z0-9_]+$/', $databaseName)) {
-    fwrite(STDERR, "Registration verification tests require an isolated local aquanova_test_* database.\n");
-    exit(1);
-}
 
 $tag = bin2hex(random_bytes(6));
 $email = 'registration-' . $tag . '@example.test';

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Icon from './Icon.jsx';
 import Sidebar, { customerPages, ownerPages } from './components/Sidebar.jsx';
-import { Button, Field, Modal } from './components/UI.jsx';
+import { Button, Field, Modal, SkeletonRoute } from './components/UI.jsx';
 import { money } from './lib/format.js';
 import { orderNeedsAction } from './data.js';
 import { authGet, authPost } from './lib/authApi.js';
@@ -49,6 +49,9 @@ export default function App() {
   const [role, setRole] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [accessLoading, setAccessLoading] = useState(false);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogReload, setCatalogReload] = useState(0);
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -79,6 +82,7 @@ export default function App() {
   const [mobileMenu, setMobileMenu] = useState(false);
   const [savingProduct, setSavingProduct] = useState(false);
   const [savingStock, setSavingStock] = useState(false);
+  const workspaceLoadCount = useRef(0);
   const productSaveLock = useRef(false);
   const stockSaveLock = useRef(false);
   const logoutLock = useRef(false);
@@ -134,7 +138,12 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
-    if (!role || !['shop', 'products'].includes(page)) return undefined;
+    if (!role || !['shop', 'products'].includes(page)) {
+      setCatalogLoading(false);
+      return undefined;
+    }
+    let active = true;
+    setCatalogLoading(true);
     const timer = window.setTimeout(async () => {
       try {
         const params = new URLSearchParams();
@@ -142,13 +151,18 @@ export default function App() {
         if (category !== 'All items') params.set('category', category);
         const catalogPath = role === 'owner' ? '/owner/products' : '/catalog/products';
         const result = await commerceGetAll(`${catalogPath}?${params.toString()}`, ['products']);
-        setProducts(result.products);
+        if (active) setProducts(result.products);
       } catch (error) {
-        setToast(error.message);
+        if (active) notify(error.message, () => setCatalogReload((current) => current + 1));
+      } finally {
+        if (active) setCatalogLoading(false);
       }
     }, 250);
-    return () => window.clearTimeout(timer);
-  }, [category, page, query, role]);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [catalogReload, category, page, query, role]);
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -210,49 +224,56 @@ export default function App() {
     return () => window.removeEventListener('popstate', restoreShopFilters);
   }, [role]);
   async function reloadWorkspace(currentRole = role) {
-    if (currentRole === 'customer') {
-      const [catalog, categoryData, cartData, orderData, profileData, shopSettings, notificationData, notificationCount] = await Promise.all([
-        commerceGetAll('/catalog/products', ['products']),
-        commerceGetAll('/catalog/categories', ['categories']),
-        commerceGetAll('/cart', ['items']),
-        commerceGetAll('/orders', ['orders']),
-        commerceGet('/account/profile'),
-        commerceGet('/settings/public'),
-        commerceGetAll('/notifications', ['notifications']),
-        commerceGet('/notifications/unread-count'),
-      ]);
-      setProducts(catalog.products);
-      setCategories(categoryData.categories.map((item) => item.name));
-      setCart(cartData.items.map((item) => ({ productId: item.id, name: item.name, price: item.price, quantity: item.quantity })));
-      setOrders(orderData.orders);
-      setCustomer(profileData.profile);
-      setSettings(shopSettings);
-      setNotifications(notificationData.notifications);
-      setUnreadNotifications(notificationCount.count);
-      return;
-    }
-    if (currentRole === 'owner') {
-      const [catalog, inventory, orderData, settingsData, customerData, reportData, notificationData, notificationCount] = await Promise.all([
-        commerceGetAll('/owner/products', ['products']),
-        commerceGetAll('/owner/inventory', [
-          { key: 'products', pageKey: 'productsPage', sizeKey: 'productsPageSize', metaKey: 'productsPagination' },
-          { key: 'movements', pageKey: 'movementsPage', sizeKey: 'movementsPageSize', metaKey: 'movementsPagination' },
-        ]),
-        commerceGetAll('/owner/orders', ['orders']),
-        commerceGet('/owner/settings'),
-        commerceGetAll('/owner/customers', ['customers']),
-        commerceGet('/owner/reports'),
-        commerceGetAll('/notifications', ['notifications']),
-        commerceGet('/notifications/unread-count'),
-      ]);
-      setProducts(catalog.products);
-      setMovements(inventory.movements);
-      setOrders(orderData.orders);
-      setSettings(settingsData.settings);
-      setCustomers(customerData.customers);
-      setReport(reportData);
-      setNotifications(notificationData.notifications);
-      setUnreadNotifications(notificationCount.count);
+    workspaceLoadCount.current += 1;
+    setWorkspaceLoading(true);
+    try {
+      if (currentRole === 'customer') {
+        const [catalog, categoryData, cartData, orderData, profileData, shopSettings, notificationData, notificationCount] = await Promise.all([
+          commerceGetAll('/catalog/products', ['products']),
+          commerceGetAll('/catalog/categories', ['categories']),
+          commerceGetAll('/cart', ['items']),
+          commerceGetAll('/orders', ['orders']),
+          commerceGet('/account/profile'),
+          commerceGet('/settings/public'),
+          commerceGetAll('/notifications', ['notifications']),
+          commerceGet('/notifications/unread-count'),
+        ]);
+        setProducts(catalog.products);
+        setCategories(categoryData.categories.map((item) => item.name));
+        setCart(cartData.items.map((item) => ({ productId: item.id, name: item.name, price: item.price, quantity: item.quantity })));
+        setOrders(orderData.orders);
+        setCustomer(profileData.profile);
+        setSettings(shopSettings);
+        setNotifications(notificationData.notifications);
+        setUnreadNotifications(notificationCount.count);
+        return;
+      }
+      if (currentRole === 'owner') {
+        const [catalog, inventory, orderData, settingsData, customerData, reportData, notificationData, notificationCount] = await Promise.all([
+          commerceGetAll('/owner/products', ['products']),
+          commerceGetAll('/owner/inventory', [
+            { key: 'products', pageKey: 'productsPage', sizeKey: 'productsPageSize', metaKey: 'productsPagination' },
+            { key: 'movements', pageKey: 'movementsPage', sizeKey: 'movementsPageSize', metaKey: 'movementsPagination' },
+          ]),
+          commerceGetAll('/owner/orders', ['orders']),
+          commerceGet('/owner/settings'),
+          commerceGetAll('/owner/customers', ['customers']),
+          commerceGet('/owner/reports'),
+          commerceGetAll('/notifications', ['notifications']),
+          commerceGet('/notifications/unread-count'),
+        ]);
+        setProducts(catalog.products);
+        setMovements(inventory.movements);
+        setOrders(orderData.orders);
+        setSettings(settingsData.settings);
+        setCustomers(customerData.customers);
+        setReport(reportData);
+        setNotifications(notificationData.notifications);
+        setUnreadNotifications(notificationCount.count);
+      }
+    } finally {
+      workspaceLoadCount.current -= 1;
+      if (workspaceLoadCount.current === 0) setWorkspaceLoading(false);
     }
   }
   const verifyRole = async (requiredRole) => {
@@ -627,6 +648,15 @@ export default function App() {
       logoutLock.current = false;
     }
   };
+  const saveAccountProfile = async () => {
+    try {
+      await commerceRequest('/account/profile', 'PATCH', customer);
+      await reloadWorkspace('customer');
+      notify('Profile saved.');
+    } catch (error) {
+      notify(error.message, () => saveAccountProfile());
+    }
+  };
   const pageProps = {
     products, orders, movements, cart, subtotal, fee, total, customer, setCustomer, category, setCategory,
     query, setQuery, orderFilter, setFilter: setOrderFilter, onNavigate: navigate, onProduct: setSelectedProduct,
@@ -637,11 +667,11 @@ export default function App() {
   let content;
   switch (page) {
     case 'home': content = <HomePage {...pageProps} />; break;
-    case 'shop': content = <ShopPage {...pageProps} products={filteredProducts} categories={categories} category={category} setCategory={changeShopCategory} query={query} setQuery={changeShopQuery} cartCount={cartCount} />; break;
+    case 'shop': content = <ShopPage {...pageProps} products={filteredProducts} categories={categories} category={category} setCategory={changeShopCategory} query={query} setQuery={changeShopQuery} cartCount={cartCount} loading={catalogLoading || workspaceLoading} />; break;
     case 'cart': content = <CartPage {...pageProps} />; break;
     case 'checkout': content = <CheckoutPage {...pageProps} onPlaceOrder={placeOrder} />; break;
     case 'payment': content = <PaymentPage order={paymentOrder} settings={settings} proofRef={proofRef} setProofRef={(value) => { setProofRef(value); setProofError(''); }} proofFile={proofFile} onFile={chooseProof} proofError={proofError} onSubmit={submitProof} onNavigate={navigate} onCopy={copyText} />; break;
-    case 'my-orders': content = <MyOrdersPage orders={orders} customerName={customer.name} onNavigate={navigate} onSelect={chooseOrder} />; break;
+    case 'my-orders': content = <MyOrdersPage orders={orders} customerName={customer.name} onNavigate={navigate} onSelect={chooseOrder} loading={workspaceLoading} />; break;
     case 'order-detail': content = <OrderDetailPage order={activeOrder} onNavigate={navigate} onCancel={(order) => { setCancelReason(''); setModal({ type: 'cancel-customer', order }); }} onNewProof={() => { setProofOrderId(activeOrder.id); setProofRef(''); setProofFile(null); navigate('payment'); }} />; break;
     case 'dashboard': content = <DashboardPage orders={orders} products={products} onNavigate={navigate} onOpenOrder={openOrderModal} />; break;
     case 'orders': content = <OrdersPage
@@ -652,14 +682,15 @@ export default function App() {
       onMarkReady={(order, deliveryBy) => runOwnerAction(() => markOrderReady(order, deliveryBy), () => markOrderReady(order, deliveryBy))}
       onComplete={(order) => runOwnerAction(() => completeOrder(order), () => completeOrder(order))}
       onCancel={(order) => runOwnerAction(() => { setCancelReason(''); setModal({ type: 'cancel', order }); })}
+      loading={workspaceLoading}
     />; break;
-    case 'products': content = <ProductsPage products={products} category={category} setCategory={setCategory} query={query} setQuery={setQuery} onAddProduct={() => runOwnerAction(() => setModal({ type: 'product' }))} onStock={(product) => runOwnerAction(() => openStockForm(product))} onImage={(product, remove = false) => runOwnerAction(() => remove ? removeProductImage(product) : openProductImage(product))} />; break;
-    case 'inventory': content = <InventoryPage products={products} movements={movements} query={query} setQuery={setQuery} onStock={(product, reason) => runOwnerAction(() => openStockForm(product, reason))} />; break;
-    case 'customers': content = <CustomersPage customers={customers} query={query} setQuery={setQuery} onToast={notify} />; break;
+    case 'products': content = <ProductsPage products={products} category={category} setCategory={setCategory} query={query} setQuery={setQuery} onAddProduct={() => runOwnerAction(() => setModal({ type: 'product' }))} onStock={(product) => runOwnerAction(() => openStockForm(product))} onImage={(product, remove = false) => runOwnerAction(() => remove ? removeProductImage(product) : openProductImage(product))} loading={catalogLoading || workspaceLoading} />; break;
+    case 'inventory': content = <InventoryPage products={products} movements={movements} query={query} setQuery={setQuery} onStock={(product, reason) => runOwnerAction(() => openStockForm(product, reason))} loading={workspaceLoading} />; break;
+    case 'customers': content = <CustomersPage customers={customers} query={query} setQuery={setQuery} onToast={notify} loading={workspaceLoading} />; break;
     case 'reports': content = <ReportsPage products={products} report={report} onToast={notify} />; break;
-    case 'account': content = <AccountPage customer={customer} setCustomer={setCustomer} onSave={async () => { try { await commerceRequest('/account/profile', 'PATCH', customer); await reloadWorkspace('customer'); notify('Profile saved.'); } catch (error) { notify(error.message, () => pageProps.onSave?.()); } }} onToast={notify} />; break;
+    case 'account': content = <AccountPage customer={customer} setCustomer={setCustomer} onSave={saveAccountProfile} onToast={notify} />; break;
     case 'settings': content = <SettingsPage settings={settings} onSave={async (values, qrFile) => { const doSave = async () => { try { await commerceRequest('/owner/settings', 'PATCH', values); if (qrFile) { const form = new FormData(); form.append('qr', qrFile); await commerceRequest('/owner/settings/gcash-qr', 'POST', form); } await reloadWorkspace('owner'); notify('Settings saved.'); } catch (error) { notify(error.message, () => doSave()); } }; await doSave(); }} onToast={notify} />; break;
-    case 'notifications': content = <NotificationsPage notifications={notifications} onRead={async (id) => { const doRead = async () => { try { await commerceRequest(`/notifications/${id}/read`, 'PATCH'); await reloadWorkspace(role); } catch (error) { notify(error.message, () => doRead()); } }; await doRead(); }} onReadAll={async () => { const doReadAll = async () => { try { await commerceRequest('/notifications/read-all', 'POST'); await reloadWorkspace(role); } catch (error) { notify(error.message, () => doReadAll()); } }; await doReadAll(); }} />; break;
+    case 'notifications': content = <NotificationsPage notifications={notifications} onRead={async (id) => { const doRead = async () => { try { await commerceRequest(`/notifications/${id}/read`, 'PATCH'); await reloadWorkspace(role); } catch (error) { notify(error.message, () => doRead()); } }; await doRead(); }} onReadAll={async () => { const doReadAll = async () => { try { await commerceRequest('/notifications/read-all', 'POST'); await reloadWorkspace(role); } catch (error) { notify(error.message, () => doReadAll()); } }; await doReadAll(); }} loading={workspaceLoading} />; break;
     case 'order-placed': content = <Confirmation icon="check" title="Order placed!" text={`Thanks, ${customer.name.split(' ')[0] || 'there'}. Your order ${activeOrderId ? `#${activeOrderId}` : ''} is in. We’ll keep you posted as it moves along.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;
     case 'proof-submitted': content = <Confirmation icon="clock" title="Payment received for review" text={`We’ve got your GCash proof for order ${proofOrderId}. Our team will check it and update your order soon.`} onOrders={() => navigate('my-orders')} onShop={() => navigate('shop')} />; break;
     default: content = <DashboardPage orders={orders} products={products} onNavigate={navigate} onOpenOrder={openOrderModal} />;
@@ -678,7 +709,7 @@ export default function App() {
     <Sidebar role={role} page={page} user={user} onNavigate={navigate} cartCount={cartCount} pendingCount={pendingCount} mobileMenu={mobileMenu} onClose={() => setMobileMenu(false)} onLogout={logout} />
     <main className="main-area"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Icon name="menu" /></button>{['cart', 'checkout', 'payment', 'order-detail', 'notifications', 'account', 'orders', 'products', 'inventory', 'settings'].includes(page) && <button className="app-back-button" onClick={goBack}><Icon name="back" size={16} /> Back</button>}<div className="breadcrumb"><span>Aquatica</span><i>/</i><b>{pageTitles[page]}</b></div></div>
       <div className="topbar-actions"><span className="workspace-role">{role === 'owner' ? 'Owner workspace' : 'Customer workspace'}</span><button className="icon-button notification-button" aria-label="Notifications" onClick={() => navigate(page === 'notifications' ? (role === 'owner' ? 'dashboard' : 'home') : 'notifications')}><Icon name="bell" size={18} />{unreadNotifications > 0 && <i />}</button><button className="top-avatar" aria-label={`Signed in as ${user.name}`}>{(user.name || 'A').slice(0, 1).toUpperCase()}</button></div>
-    </header><div className="content-area">{selectedProduct ? <ProductDetails product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={addToCart} /> : content}</div>
+    </header><div className="content-area">{accessLoading ? <SkeletonRoute /> : selectedProduct ? <ProductDetails product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={addToCart} /> : content}</div>
     <footer className="app-footer"><span>© 2026 Aquatica Nasugbu</span><span>Made for little pieces of the ocean <i>✳</i></span></footer></main>
     {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}{toastRetry && <button className="toast-retry" onClick={() => { const retry = toastRetry; setToast(''); setToastRetry(null); retry(); }}>Retry</button>}<button aria-label="Dismiss notification" onClick={() => { setToast(''); setToastRetry(null); }}><Icon name="close" size={15} /></button></div>}
     {modal && <AppModal modal={modal} onClose={() => setModal(null)} onRejectOpen={(order) => openPaymentReview(order, 'reject')} productForm={productForm} setProductForm={setProductForm} stockForm={stockForm} setStockForm={setStockForm} savingProduct={savingProduct} savingStock={savingStock} productImageFile={productImageFile} setProductImageFile={setProductImageFile} savingImage={savingImage} onSaveProductImage={saveProductImage} onRemoveProductImage={removeProductImage} products={products} rejectReason={rejectReason} setRejectReason={setRejectReason} cancelReason={cancelReason} setCancelReason={setCancelReason} onSaveProduct={(event) => { event.preventDefault(); runOwnerAction(() => saveProduct(), () => saveProduct()); }} onSaveStock={(event) => { event.preventDefault(); runOwnerAction(() => saveStock(), () => saveStock()); }} onReject={(order) => runOwnerAction(() => rejectPayment(order), () => rejectPayment(order))} onApprove={(order) => runOwnerAction(() => approvePayment(order), () => approvePayment(order))} onCancel={(order) => cancelOrder(order, cancelReason)} />}

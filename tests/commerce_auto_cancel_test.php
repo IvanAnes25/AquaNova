@@ -2,12 +2,7 @@
 
 declare(strict_types=1);
 
-require_once dirname(__DIR__) . '/database/connection.php';
-
-if (PHP_SAPI !== 'cli' || !database_is_local()) {
-    fwrite(STDERR, "Auto-cancel tests may only run from a local CLI environment.\n");
-    exit(1);
-}
+require_once __DIR__ . '/isolated_test_database.php';
 
 $assertions = 0;
 $assert = static function (bool $condition, string $message) use (&$assertions): void {
@@ -17,7 +12,7 @@ $assert = static function (bool $condition, string $message) use (&$assertions):
     }
 };
 
-$pdo = database_connection();
+$pdo = isolated_test_database_connection();
 $tag = bin2hex(random_bytes(5));
 $email = 'auto-cancel-' . $tag . '@example.test';
 $userId = 0;
