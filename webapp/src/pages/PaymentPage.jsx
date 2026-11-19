@@ -53,7 +53,7 @@ export default function PaymentPage({ order, settings, proofRef, setProofRef, pr
                 <Field label="GCash reference number"><input className="input" placeholder="e.g. 123456789012" value={proofRef} onChange={(event) => setProofRef(event.target.value)} /><span className="field-hint">Usually 10–13 digits. You can find it in your GCash receipt.</span></Field>
                 <Field label="Payment screenshot"><label className="upload-box"><input type="file" accept="image/*" onChange={(event) => onFile(event.target.files?.[0])} /><span className="upload-icon"><Icon name="upload" size={20} /></span><b>{proofFile?.name || 'Upload payment screenshot'}</b><small>JPG or PNG · up to 2 MB</small></label></Field>
                 {proofError && <p className="inline-error">{proofError}</p>}
-                <Button className="button-full" onClick={() => onSubmit(order.id)}>Submit payment proof <Icon name="arrow" size={16} /></Button>
+                <Button className="button-full" aria-label="Upload payment proof" onClick={async () => { await onSubmit(order.id); }}>Upload proof <Icon name="arrow" size={16} /></Button>
               </div>}
           <div className="secure-note"><Icon name="clock" size={16} /> Your payment is checked by our team before your order is prepared.</div>
         </aside>

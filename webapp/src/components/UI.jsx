@@ -75,3 +75,29 @@ export function OrderSummary({ items, subtotal, fee, total, action, fulfillment 
     <div className="summary-reassurance"><Icon name="check" size={15} /> No hidden fees. Just happy fish.</div>
   </aside>;
 }
+
+export function SkeletonGrid({ count = 6 }) {
+  return <div className="skeleton-grid" aria-label="Loading items">
+    {Array.from({ length: count }).map((_, i) => (
+      <div className="skeleton-card" key={i}>
+        <div className="skeleton-card-img skeleton-shimmer" />
+        <div className="skeleton-line skeleton-shimmer" />
+        <div className="skeleton-line-sm skeleton-shimmer" />
+      </div>
+    ))}
+  </div>;
+}
+
+export function SkeletonList({ count = 4, className = '' }) {
+  return <div className={`skeleton-list-container ${className}`} aria-label="Loading list">
+    {Array.from({ length: count }).map((_, i) => (
+      <div className="skeleton-row" key={i}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div className="skeleton-line skeleton-shimmer" style={{ width: '45%' }} />
+          <div className="skeleton-line-sm skeleton-shimmer" style={{ width: '75%' }} />
+        </div>
+        <div className="skeleton-shimmer" style={{ width: '60px', height: '24px', borderRadius: '4px' }} />
+      </div>
+    ))}
+  </div>;
+}

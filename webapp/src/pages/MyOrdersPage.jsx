@@ -1,15 +1,17 @@
-import { Button, EmptyState, SectionTitle, Status } from '../components/UI.jsx';
+import { Button, EmptyState, SectionTitle, SkeletonList, Status } from '../components/UI.jsx';
 import { money } from '../lib/format.js';
 
-export default function MyOrdersPage({ orders, customerName, onNavigate, onSelect }) {
-  const customerOrders = orders.filter((order) => order.customer === 'Mika Reyes' || order.customer === customerName);
+export default function MyOrdersPage({ orders, customerName, onNavigate, onSelect, loading = false }) {
+  const customerOrders = (orders || []).filter((order) => order.customer === 'Mika Reyes' || order.customer === customerName);
   return <>
     <SectionTitle eyebrow="YOUR AQUATICA ORDERS" title="My orders" />
-    <div className="order-list">{customerOrders.length ? customerOrders.map((order) => <article className="panel customer-order-card" key={order.id}>
-      <div className="customer-order-top"><div><span className="eyebrow">{order.id} <i>·</i> {order.date}</span><h3>{order.items.map((item) => `${item.quantity} × ${item.name}`).join(', ')}</h3></div><Status>{order.statusLabel || order.status}</Status></div>
-      <div className="customer-order-bottom"><span>{order.delivery} <i>·</i> {order.method}</span><span>Payment: <Status>{order.paymentStatus}</Status></span><b>{money(order.total)}</b><Button variant="secondary" onClick={() => onSelect(order)}>{order.method === 'GCash' && ['Unpaid', 'Rejected'].includes(order.paymentStatus) ? 'Upload proof' : 'View order'}</Button></div>
-      {order.proofReason && order.paymentStatus === 'Rejected' && <div className="reject-note">Payment update needed: {order.proofReason}</div>}
-      {order.customerNotice && <div className="customer-order-notice">{order.customerNotice}</div>}
-    </article>) : <EmptyState title="Your first order is waiting" text="Browse the collection and find a new favorite for your aquarium." action={<Button onClick={() => onNavigate('shop')}>Explore the shop</Button>} />}</div>
+    {loading || orders == null
+      ? <div className="panel order-list"><SkeletonList count={3} /></div>
+      : <div className="order-list">{customerOrders.length ? customerOrders.map((order) => <article className="panel customer-order-card" key={order.id}>
+        <div className="customer-order-top"><div><span className="eyebrow">{order.id} <i>·</i> {order.date}</span><h3>{order.items.map((item) => `${item.quantity} × ${item.name}`).join(', ')}</h3></div><Status>{order.statusLabel || order.status}</Status></div>
+        <div className="customer-order-bottom"><span>{order.delivery} <i>·</i> {order.method}</span><span>Payment: <Status>{order.paymentStatus}</Status></span><b>{money(order.total)}</b><Button variant="secondary" onClick={() => onSelect(order)}>{order.method === 'GCash' && ['Unpaid', 'Rejected'].includes(order.paymentStatus) ? 'Upload proof' : 'View order'}</Button></div>
+        {order.proofReason && order.paymentStatus === 'Rejected' && <div className="reject-note">Payment update needed: {order.proofReason}</div>}
+        {order.customerNotice && <div className="customer-order-notice">{order.customerNotice}</div>}
+      </article>) : <EmptyState title="Your first order is waiting" text="Browse the collection and find a new favorite for your aquarium." action={<Button onClick={() => onNavigate('shop')}>Explore the shop</Button>} />}</div>}
   </>;
 }

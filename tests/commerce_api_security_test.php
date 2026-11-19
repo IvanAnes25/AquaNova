@@ -150,20 +150,27 @@ final class ApiTestClient
         }
     }
 
-    public function asyncHandle(string $path, array $data, ?string $idempotencyKey = null): CurlHandle
+    public function asyncHandle(string $path, array $data, ?string $idempotencyKey = null, bool $multipart = false): CurlHandle
     {
         $handle = curl_init($this->baseUrl . $path);
+        $headers = [
+            'Accept: application/json',
+            'X-CSRF-Token: ' . $this->csrfToken,
+            'Idempotency-Key: ' . ($idempotencyKey ?? bin2hex(random_bytes(16))),
+        ];
+        if (!$multipart) {
+            $headers[] = 'Content-Type: application/json';
+            $postFields = json_encode($data, JSON_THROW_ON_ERROR);
+        } else {
+            $postFields = $data;
+        }
         curl_setopt_array($handle, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => json_encode($data, JSON_THROW_ON_ERROR),
+            CURLOPT_POSTFIELDS => $postFields,
             CURLOPT_COOKIEFILE => $this->cookieFile,
             CURLOPT_COOKIEJAR => $this->cookieFile,
-            CURLOPT_HTTPHEADER => [
-                'Accept: application/json', 'Content-Type: application/json',
-                'X-CSRF-Token: ' . $this->csrfToken,
-                'Idempotency-Key: ' . ($idempotencyKey ?? bin2hex(random_bytes(16))),
-            ],
+            CURLOPT_HTTPHEADER => $headers,
             CURLOPT_TIMEOUT => 30,
         ]);
         return $handle;
@@ -752,6 +759,81 @@ try {
     $confirmCashOrder = $ownerA->request('POST', '/api/v1/owner/orders/' . $placedOrderId . '/actions', ['action' => 'confirm_cash']);
     $assert($confirmCashOrder['status'] === 200, 'A newly placed cash order can be confirmed.');
 
+    $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
+        ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
+    $parallelActionOrder = $customer->request('POST', '/api/v1/orders', [
+        'fulfillment' => 'pickup', 'paymentMethod' => 'cash_pickup', 'name' => 'Parallel Action', 'phone' => '5550000',
+    ]);
+    $parallelActionOrderId = (int) ($parallelActionOrder['json']['order']['databaseId'] ?? 0);
+    if ($parallelActionOrderId > 0) {
+        $orderIds[] = $parallelActionOrderId;
+    }
+    $parallelActionKey = bin2hex(random_bytes(16));
+    $parallelActionPayload = ['action' => 'confirm_cash'];
+    $pActionOne = $ownerA->asyncHandle('/api/v1/owner/orders/' . $parallelActionOrderId . '/actions', $parallelActionPayload, $parallelActionKey);
+    $pActionTwo = $ownerA->asyncHandle('/api/v1/owner/orders/' . $parallelActionOrderId . '/actions', $parallelActionPayload, $parallelActionKey);
+    $multiAction = curl_multi_init();
+    curl_multi_add_handle($multiAction, $pActionOne);
+    curl_multi_add_handle($multiAction, $pActionTwo);
+    do {
+        $mStatus = curl_multi_exec($multiAction, $running);
+        if ($running) curl_multi_select($multiAction, 1.0);
+    } while ($running && $mStatus === CURLM_OK);
+    $parallelActionStatuses = [
+        (int) curl_getinfo($pActionOne, CURLINFO_RESPONSE_CODE),
+        (int) curl_getinfo($pActionTwo, CURLINFO_RESPONSE_CODE),
+    ];
+    sort($parallelActionStatuses);
+    curl_multi_remove_handle($multiAction, $pActionOne);
+    curl_multi_remove_handle($multiAction, $pActionTwo);
+    curl_close($pActionOne);
+    curl_close($pActionTwo);
+    curl_multi_close($multiAction);
+    $parallelSaleCount = $pdo->prepare("SELECT COUNT(*) FROM stock_movements WHERE order_id = :order_id AND type = 'sale'");
+    $parallelSaleCount->execute(['order_id' => $parallelActionOrderId]);
+    $assert(
+        ($parallelActionStatuses === [200, 200] || $parallelActionStatuses === [200, 409])
+            && (int) $parallelSaleCount->fetchColumn() === 1,
+        'Parallel identical payment action requests must create exactly one stock movement.'
+    );
+
+    $parallelStockKey = bin2hex(random_bytes(16));
+    $parallelStockPayload = [
+        'productId' => $productId,
+        'quantity' => 4,
+        'type' => 'restock',
+        'reason' => 'Parallel restock test',
+    ];
+    $stockBefore = (int) $pdo->query("SELECT stock FROM products WHERE id = {$productId}")->fetchColumn();
+    $movementsBefore = (int) $pdo->query("SELECT COUNT(*) FROM stock_movements WHERE product_id = {$productId}")->fetchColumn();
+    $pStockOne = $ownerA->asyncHandle('/api/v1/owner/inventory/movements', $parallelStockPayload, $parallelStockKey);
+    $pStockTwo = $ownerA->asyncHandle('/api/v1/owner/inventory/movements', $parallelStockPayload, $parallelStockKey);
+    $multiStock = curl_multi_init();
+    curl_multi_add_handle($multiStock, $pStockOne);
+    curl_multi_add_handle($multiStock, $pStockTwo);
+    do {
+        $mStatus = curl_multi_exec($multiStock, $running);
+        if ($running) curl_multi_select($multiStock, 1.0);
+    } while ($running && $mStatus === CURLM_OK);
+    $parallelStockStatuses = [
+        (int) curl_getinfo($pStockOne, CURLINFO_RESPONSE_CODE),
+        (int) curl_getinfo($pStockTwo, CURLINFO_RESPONSE_CODE),
+    ];
+    sort($parallelStockStatuses);
+    curl_multi_remove_handle($multiStock, $pStockOne);
+    curl_multi_remove_handle($multiStock, $pStockTwo);
+    curl_close($pStockOne);
+    curl_close($pStockTwo);
+    curl_multi_close($multiStock);
+    $stockAfter = (int) $pdo->query("SELECT stock FROM products WHERE id = {$productId}")->fetchColumn();
+    $movementsAfter = (int) $pdo->query("SELECT COUNT(*) FROM stock_movements WHERE product_id = {$productId}")->fetchColumn();
+    $assert(
+        ($parallelStockStatuses === [200, 200] || $parallelStockStatuses === [200, 409])
+            && $movementsAfter === $movementsBefore + 1
+            && $stockAfter === $stockBefore + 4,
+        'Parallel identical stock change requests must create exactly one movement and update stock once.'
+    );
+
     $setDeliveryFee = $ownerA->request('PATCH', '/api/v1/owner/settings', ['deliveryFee' => 12.5]);
     $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
         ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
@@ -975,6 +1057,42 @@ try {
     $pathStatement = $pdo->prepare('SELECT image_path FROM payment_proofs WHERE order_id = :id');
     $pathStatement->execute(['id' => $validUploadOrder]);
     $uploadedPaths[] = (string) $pathStatement->fetchColumn();
+
+    $parallelProofOrder = $createOrder($userIds[0], $productId, 'PARPROOF', 'gcash', 'unpaid');
+    $parallelProofKey = bin2hex(random_bytes(16));
+    $parallelProofData = [
+        'reference' => strtoupper(substr($tag, 0, 8)) . 'PPRF',
+        'proof' => new CURLFile($validImageFile, 'image/png', 'proof.png'),
+    ];
+    $proofsBefore = (int) $pdo->query("SELECT COUNT(*) FROM payment_proofs WHERE order_id = {$parallelProofOrder}")->fetchColumn();
+    $pProofOne = $customer->asyncHandle('/api/v1/orders/' . $parallelProofOrder . '/payment-proof', $parallelProofData, $parallelProofKey, true);
+    $pProofTwo = $customer->asyncHandle('/api/v1/orders/' . $parallelProofOrder . '/payment-proof', $parallelProofData, $parallelProofKey, true);
+    $multiProof = curl_multi_init();
+    curl_multi_add_handle($multiProof, $pProofOne);
+    curl_multi_add_handle($multiProof, $pProofTwo);
+    do {
+        $mStatus = curl_multi_exec($multiProof, $running);
+        if ($running) curl_multi_select($multiProof, 1.0);
+    } while ($running && $mStatus === CURLM_OK);
+    $parallelProofStatuses = [
+        (int) curl_getinfo($pProofOne, CURLINFO_RESPONSE_CODE),
+        (int) curl_getinfo($pProofTwo, CURLINFO_RESPONSE_CODE),
+    ];
+    sort($parallelProofStatuses);
+    curl_multi_remove_handle($multiProof, $pProofOne);
+    curl_multi_remove_handle($multiProof, $pProofTwo);
+    curl_close($pProofOne);
+    curl_close($pProofTwo);
+    curl_multi_close($multiProof);
+    $proofsAfter = (int) $pdo->query("SELECT COUNT(*) FROM payment_proofs WHERE order_id = {$parallelProofOrder}")->fetchColumn();
+    $parallelProofPathStmt = $pdo->prepare('SELECT image_path FROM payment_proofs WHERE order_id = :order_id');
+    $parallelProofPathStmt->execute(['order_id' => $parallelProofOrder]);
+    $uploadedPaths[] = (string) $parallelProofPathStmt->fetchColumn();
+    $assert(
+        ($parallelProofStatuses === [201, 201] || $parallelProofStatuses === [201, 409])
+            && $proofsAfter === $proofsBefore + 1,
+        'Parallel identical proof upload requests must create exactly one payment proof record.'
+    );
     $gifUploadFile = tempnam(sys_get_temp_dir(), 'aquatica-valid-gif-');
     $temporaryFiles[] = $gifUploadFile;
     $gif = imagecreatetruecolor(2, 2);

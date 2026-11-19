@@ -63,7 +63,7 @@ export default function SettingsPage({ settings, onSave }) {
             <span className="field-hint">{values.gcashReady ? 'GCash checkout is enabled.' : 'GCash checkout remains unavailable until recipient name, number, and QR are configured.'}</span>
           </Field>
         </div>
-        <div className="settings-actions"><Button type="submit" loading={saving}>Save changes</Button></div>
+        <div className="settings-actions"><Button type="submit" aria-label="Save settings" loading={saving}>Save settings</Button></div>
       </form>
     </div>
   </>;

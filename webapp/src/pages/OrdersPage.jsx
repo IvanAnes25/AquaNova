@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import Icon from '../Icon.jsx';
-import { Button, EmptyState, SectionTitle, Status } from '../components/UI.jsx';
+import { Button, EmptyState, SectionTitle, SkeletonList, Status } from '../components/UI.jsx';
 import { orderNeedsAction } from '../data.js';
 import { money } from '../lib/format.js';
 
@@ -37,7 +37,7 @@ function hasNextAction(order) {
 
 export default function OrdersPage({
   orders, filter, setFilter, query, setQuery, selectedOrderId, setSelectedOrderId,
-  onCheckProof, onConfirm, onMarkReady, onComplete, onCancel,
+  onCheckProof, onConfirm, onMarkReady, onComplete, onCancel, loading = false,
 }) {
   const [deliveryBy, setDeliveryBy] = useState('owner');
   const sortedOrders = useMemo(() => {
@@ -65,12 +65,12 @@ export default function OrdersPage({
   }, [selectedOrder, setSelectedOrderId, visibleOrders]);
 
   const action = selectedOrder && nextAction(selectedOrder);
-  const runAction = () => {
+  const runAction = async () => {
     if (!selectedOrder || !action) return;
-    if (action.action === 'proof') onCheckProof(selectedOrder);
-    if (action.action === 'confirm') onConfirm(selectedOrder);
-    if (action.action === 'ready') onMarkReady(selectedOrder, deliveryBy);
-    if (action.action === 'complete') onComplete(selectedOrder);
+    if (action.action === 'proof') await onCheckProof(selectedOrder);
+    if (action.action === 'confirm') await onConfirm(selectedOrder);
+    if (action.action === 'ready') await onMarkReady(selectedOrder, deliveryBy);
+    if (action.action === 'complete') await onComplete(selectedOrder);
   };
 
   return <>
@@ -88,7 +88,7 @@ export default function OrdersPage({
     </div>
     <div className="orders-inbox">
       <section className="panel orders-inbox-list" aria-label={`${filter} orders`}>
-        {visibleOrders.length ? visibleOrders.map((order) => <button key={order.id} className={`order-inbox-item ${selectedOrderId === order.id ? 'order-inbox-item-active' : ''}`} onClick={() => setSelectedOrderId(order.id)}>
+        {loading || orders == null ? <SkeletonList count={4} /> : visibleOrders.length ? visibleOrders.map((order) => <button key={order.id} className={`order-inbox-item ${selectedOrderId === order.id ? 'order-inbox-item-active' : ''}`} onClick={() => setSelectedOrderId(order.id)}>
           <span className="order-inbox-heading"><b>{order.id}</b><span>{order.date}</span></span>
           <strong>{order.customer}</strong>
           <span className="order-inbox-items">{order.items.map((item) => `${item.quantity} × ${item.name}`).join(', ')}</span>
@@ -103,7 +103,7 @@ export default function OrdersPage({
         {action && <div className="order-inbox-actions">
           {action.action === 'ready' && selectedOrder.delivery === 'Delivery' && <label className="field">Delivery provider<select className="input" value={deliveryBy} onChange={(event) => setDeliveryBy(event.target.value)}><option value="owner">Owner delivery</option><option value="lalamove">Lalamove</option></select></label>}
           <Button className="button-full" disabled={action.disabled} onClick={runAction}>{action.label}{action.action === 'proof' && <Icon name="arrow" size={16} />}</Button>
-          {!['Completed', 'Cancelled'].includes(selectedOrder.status) && <Button variant="danger-soft" className="button-full" onClick={() => onCancel(selectedOrder)}>Cancel order</Button>}
+          {!['Completed', 'Cancelled'].includes(selectedOrder.status) && <Button variant="danger-soft" className="button-full" onClick={async () => { await onCancel(selectedOrder); }}>Cancel order</Button>}
         </div>}
       </section> : <section className="panel order-inbox-placeholder"><EmptyState title={filter === 'Needs action' && !query ? 'All caught up' : query ? 'No matching orders' : 'No orders here'} text={query ? 'Try another order number or customer name.' : filter === 'Needs action' ? 'New orders that need attention will appear here.' : 'Orders in this status will appear here.'} /></section>}
     </div>
