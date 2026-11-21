@@ -4,7 +4,7 @@ export const money = (amount) => `₱${Number(amount).toLocaleString('en-PH', {
 })}`;
 
 export const stockLabel = (stock) => {
-  if (stock === 0) return 'Sold out';
+  if (stock === 0) return '! Sold out';
   if (stock <= 5) return 'Low stock';
   return 'In stock';
 };

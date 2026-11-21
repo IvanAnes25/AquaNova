@@ -70,21 +70,41 @@ if ($action === 'setup') {
         ['main', 'E2E Aquarium Supply ' . $tag, 20],
         ['short', 'E2E Short Stock ' . $tag, 1],
         ['xss', '<img src=x onerror=alert(1)> ' . $tag, 2],
+        ['soldout', 'E2E Sold Out ' . $tag, 0],
     ] as [$key, $name, $stock]) {
         $slug = 'e2e-' . $tag . '-' . $key;
+        $imagePath = null;
+        if (in_array($key, ['main', 'soldout'], true)) {
+            $imageDirectory = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'private' . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'products';
+            if (!is_dir($imageDirectory) && !mkdir($imageDirectory, 0750, true) && !is_dir($imageDirectory)) {
+                throw new RuntimeException('Could not create the isolated product-image fixture directory.');
+            }
+            $imagePath = 'private/uploads/products/e2e-' . $tag . '-' . $key . '.png';
+            $imageBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==', true);
+            if (!is_string($imageBytes)
+                || file_put_contents(dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $imagePath), $imageBytes) === false) {
+                throw new RuntimeException('Could not write an isolated product-image fixture.');
+            }
+        }
         $insert = $pdo->prepare(
             'INSERT INTO products
                 (name, category, short_description, description, price, stock, image_url, featured, is_active,
                  category_id, slug, low_stock_threshold, image_path)
-             VALUES (?, ?, ?, ?, 12.50, ?, \'\', 1, 1, ?, ?, 2, NULL)'
+             VALUES (?, ?, ?, ?, 12.50, ?, \'\', 1, 1, ?, ?, 2, ?)'
         );
-        $insert->execute([$name, $category['name'], 'Browser test item', 'Isolated Playwright fixture.', $stock, $category['id'], $slug]);
-        $products[$key] = ['id' => (int) $pdo->lastInsertId(), 'name' => $name, 'initialStock' => $stock, 'slug' => $slug];
+        $insert->execute([
+            $name, $category['name'], 'Browser test item', 'Isolated Playwright fixture.',
+            $stock, $category['id'], $slug, $imagePath,
+        ]);
+        $products[$key] = [
+            'id' => (int) $pdo->lastInsertId(), 'name' => $name, 'initialStock' => $stock,
+            'slug' => $slug, 'category' => $category['name'],
+        ];
     }
 
     $settingKeys = ['gcash_enabled', 'gcash_name', 'gcash_number', 'gcash_qr_path', 'cod_enabled',
         'cash_pickup_enabled', 'delivery_fee', 'shop_name', 'shop_address', 'shop_hours',
-        'shop_open_override', 'shop_closed_message', 'accept_orders_when_closed'];
+        'shop_open_override', 'shop_closed_message', 'accept_orders_when_closed', 'large_change_threshold'];
     $settings = [];
     $findSetting = $pdo->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
     foreach ($settingKeys as $key) {
@@ -126,6 +146,7 @@ if ($action === 'setup') {
         'shop_open_override' => 'scheduled',
         'shop_closed_message' => '',
         'accept_orders_when_closed' => '1',
+        'large_change_threshold' => '20',
     ] as $key => $value) {
         $writeSetting->execute([$key, $value]);
     }
@@ -178,6 +199,19 @@ if ($action === 'adjust-stock') {
         }
         throw $exception;
     }
+}
+
+if ($action === 'seed-soldout-cart') {
+    $fixture = $json($argv[2] ?? '');
+    $soldOutProduct = $fixture['products']['soldout'] ?? null;
+    if (($fixture['database'] ?? '') !== $testDatabase || !is_array($soldOutProduct)) {
+        throw new RuntimeException('Invalid isolated sold-out cart fixture request.');
+    }
+    $pdo->prepare(
+        'INSERT INTO cart_items (user_id, product_id, qty) VALUES (?, ?, 1)
+         ON DUPLICATE KEY UPDATE qty = GREATEST(qty, 1)'
+    )->execute([(int) $fixture['users']['customer']['id'], (int) $soldOutProduct['id']]);
+    $emit(['created' => true]);
 }
 
 if ($action === 'seed-notifications') {
@@ -311,13 +345,17 @@ if ($action === 'cleanup') {
             if (!is_string($productName) || !str_starts_with($productName, $expectedPrefix)) {
                 throw new RuntimeException('Cleanup payload contains an out-of-scope product.');
             }
-            $productQuery = $pdo->prepare('SELECT id FROM products WHERE name = ?');
+            $productQuery = $pdo->prepare('SELECT id, image_path FROM products WHERE name = ?');
             $productQuery->execute([$productName]);
-            $productId = $productQuery->fetchColumn();
-            if ($productId !== false) {
-                $pdo->prepare('DELETE FROM cart_items WHERE product_id = ?')->execute([(int) $productId]);
-                $pdo->prepare('DELETE FROM stock_movements WHERE product_id = ?')->execute([(int) $productId]);
-                $pdo->prepare('DELETE FROM products WHERE id = ?')->execute([(int) $productId]);
+            $createdProduct = $productQuery->fetch(PDO::FETCH_ASSOC);
+            if ($createdProduct !== false) {
+                if (is_string($createdProduct['image_path'])
+                    && str_starts_with($createdProduct['image_path'], 'private/uploads/products/')) {
+                    $productImagePaths[] = $createdProduct['image_path'];
+                }
+                $pdo->prepare('DELETE FROM cart_items WHERE product_id = ?')->execute([(int) $createdProduct['id']]);
+                $pdo->prepare('DELETE FROM stock_movements WHERE product_id = ?')->execute([(int) $createdProduct['id']]);
+                $pdo->prepare('DELETE FROM products WHERE id = ?')->execute([(int) $createdProduct['id']]);
             }
         }
         foreach ($fixture['users'] as $user) {
@@ -347,11 +385,11 @@ if ($action === 'cleanup') {
                 throw new RuntimeException('Could not remove a generated proof image.');
             }
         }
-        foreach ($productImagePaths as $relativePath) {
-            $path = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
-            if (is_file($path) && !unlink($path)) {
-                throw new RuntimeException('Could not remove a generated product image.');
-            }
+    }
+    foreach ($productImagePaths as $relativePath) {
+        $path = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+        if (is_file($path) && !unlink($path)) {
+            throw new RuntimeException('Could not remove a generated product image.');
         }
     }
     $qr = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, (string) $fixture['qrRelative']);

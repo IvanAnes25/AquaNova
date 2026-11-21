@@ -7,10 +7,15 @@ const databaseName = process.env.AQUATICA_TEST_DB_NAME;
 if (!databaseName || !/^aquanova_test_[a-z0-9_]+$/.test(databaseName)) {
   throw new Error('Set AQUATICA_TEST_DB_NAME to an isolated aquanova_test_* database before running Playwright.');
 }
+if (process.env.DB_NAME && process.env.DB_NAME !== databaseName) {
+  throw new Error('DB_NAME must match AQUATICA_TEST_DB_NAME before running Playwright.');
+}
+process.env.DB_NAME = databaseName;
 
 const projectRoot = fileURLToPath(new URL('.', import.meta.url));
 const documentRoot = resolve(projectRoot, '..');
 const apiUrl = 'http://127.0.0.1:8091';
+const apiPreflightUrl = `${apiUrl}/AquaNova/api/test/smtp-config?expectedDatabase=${encodeURIComponent(databaseName)}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -26,7 +31,7 @@ export default defineConfig({
   webServer: process.env.AQUATICA_E2E_URL ? undefined : [
     {
       command: `php -d extension=gd -S 127.0.0.1:8091 -t "${documentRoot}" "${resolve(projectRoot, 'tests/api_test_router.php')}"`,
-      url: `${apiUrl}/AquaNova/api/auth/csrf.php`,
+      url: apiPreflightUrl,
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,
       env: {

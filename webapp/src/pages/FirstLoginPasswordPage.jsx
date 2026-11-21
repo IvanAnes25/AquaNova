@@ -10,13 +10,13 @@ export default function FirstLoginPasswordPage({ onComplete }) {
   const [visible, setVisible] = useState({});
   const [busy, setBusy] = useState(false);
   const formRef = useRef(null);
-  const passwordValid = password.length >= 8;
+  const passwordValid = password.length >= 8 && password.length <= 1024;
 
   async function submit(event) {
     event.preventDefault();
     const validation = {};
     if (!currentPassword) validation.currentPassword = 'Enter your temporary password.';
-    if (!passwordValid) validation.password = 'Use at least 8 characters.';
+    if (!passwordValid) validation.password = 'Use a password with 8 to 1,024 characters.';
     if (password && password === currentPassword) validation.password = 'Choose a password different from your temporary password.';
     if (confirmPassword !== password) validation.confirmPassword = 'Passwords do not match.';
     if (Object.keys(validation).length) {
@@ -53,7 +53,10 @@ export default function FirstLoginPasswordPage({ onComplete }) {
       {label}
       <span className="password-input-wrap">
         <input
-          aria-describedby={errors[name] ? `${name}-error` : undefined}
+          aria-describedby={[
+            errors[name] ? `${name}-error` : '',
+            name === 'password' ? 'first-login-password-rules' : '',
+          ].filter(Boolean).join(' ') || undefined}
           aria-invalid={Boolean(errors[name])}
           autoComplete={autoComplete}
           name={name}
@@ -84,8 +87,8 @@ export default function FirstLoginPasswordPage({ onComplete }) {
       {errors.form && <p className="inline-error" role="alert">{errors.form}</p>}
       {passwordField('currentPassword', 'Temporary password', currentPassword, (event) => setCurrentPassword(event.target.value), 'current-password')}
       {passwordField('password', 'New password', password, (event) => setPassword(event.target.value), 'new-password')}
-      <ul className="password-rules" aria-label="Password requirements">
-        <li className={passwordValid ? 'password-rule-met' : ''}>{passwordValid ? '✓' : '•'} At least 8 characters</li>
+      <ul className="password-rules" id="first-login-password-rules" aria-label="Password requirements" aria-live="polite">
+        <li className={passwordValid ? 'password-rule-met' : ''}>{passwordValid ? '✓' : '•'} 8 to 1,024 characters</li>
       </ul>
       {passwordField('confirmPassword', 'Confirm new password', confirmPassword, (event) => setConfirmPassword(event.target.value), 'new-password')}
       <button disabled={busy} type="submit">{busy ? 'Saving…' : 'Save new password'}</button>

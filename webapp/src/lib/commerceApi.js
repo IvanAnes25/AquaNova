@@ -85,3 +85,33 @@ export async function downloadReport(period = 'month', date) {
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+export async function downloadStockArchives(filters = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) params.set(key, key === 'largeOnly' ? '1' : String(value));
+  }
+  const response = await fetch(commercePath(`${api}/owner/inventory/archives.csv?${params}`), {
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    let message = 'Could not download the stock archive.';
+    try {
+      message = (await response.json()).message || message;
+    } catch {
+      throw new Error(message);
+    }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1]
+    || 'aquatica-stock-archive.csv';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

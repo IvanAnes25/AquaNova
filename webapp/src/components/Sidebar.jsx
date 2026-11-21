@@ -15,6 +15,7 @@ const ownerLinks = [
   { id: 'customers', label: 'Customers', icon: 'users' },
   { id: 'reports', label: 'Reports', icon: 'chart' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
+  { id: 'account', label: 'My account', icon: 'users' },
 ];
 
 export const ownerPages = ownerLinks.map((item) => item.id);

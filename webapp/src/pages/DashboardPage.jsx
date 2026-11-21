@@ -7,7 +7,9 @@ import { money } from '../lib/format.js';
 export default function DashboardPage({ orders, products, onNavigate, onOpenOrder }) {
   const pending = orders.filter((order) => order.status === 'Pending').length;
   const reviews = orders.filter((order) => order.paymentStatus === 'Under review').length;
-  const needsAttention = products.filter((product) => product.stock <= 5).slice(0, 4);
+  const needsAttention = products
+    .filter((product) => product.stock <= 5)
+    .sort((left, right) => left.stock - right.stock || left.name.localeCompare(right.name));
   return <>
     <SectionTitle eyebrow="MONDAY, NOVEMBER 9, 2026" title="Good morning, Aquatica" action={<Button variant="secondary" onClick={() => onNavigate('orders')}>View all orders <Icon name="arrow" size={16} /></Button>} />
     <section className="welcome-banner"><div><span>YOUR SHOP AT A GLANCE</span><h2>A good day to make a splash.</h2><p>Here’s what’s happening with your Aquatica shop today.</p></div><div className="banner-art"><div className="banner-bubble bubble-a" /><div className="banner-bubble bubble-b" /><span>🐠</span><i>〰</i></div></section>

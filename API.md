@@ -36,7 +36,7 @@ All routes are same-origin PHP endpoints. JSON requests use `Content-Type: appli
 | POST | `/api/v1/orders/{id}/payment-proof` | Owning customer |
 | GET | `/api/v1/orders/{id}/payment-proof/image` | Owning customer or owner |
 | GET, PATCH | `/api/v1/account/profile` | Customer |
-| POST | `/api/v1/account/password` | Signed-in initial owner |
+| POST | `/api/v1/account/password` | Signed-in customer or owner; change password with current password, failed attempts are rate-limited, other sessions end, and the change is audited |
 | GET | `/api/v1/notifications` | Signed-in user |
 | GET | `/api/v1/notifications/unread-count` | Signed-in user |
 | PATCH | `/api/v1/notifications/{id}/read` | Owning user |
@@ -54,6 +54,8 @@ All routes are same-origin PHP endpoints. JSON requests use `Content-Type: appli
 | GET, POST, DELETE | `/api/v1/owner/products/{idOrSlug}/image` | Owner |
 | GET | `/api/v1/owner/inventory` | Owner |
 | POST | `/api/v1/owner/inventory/movements` | Owner |
+| GET | `/api/v1/owner/inventory/archives` | Owner |
+| GET | `/api/v1/owner/inventory/archives.csv` | Owner |
 | GET | `/api/v1/owner/customers` | Owner |
 | GET | `/api/v1/owner/reports` | Owner |
 | GET | `/api/v1/owner/reports.csv` | Owner |
@@ -123,6 +125,6 @@ The following writes require an `Idempotency-Key` header: order creation, custom
 
 The key, endpoint, and canonical request payload are stored for up to 24 hours. A completed same-payload replay returns the original status code and body without repeating side effects and includes `Idempotent-Replay: true`. A different payload or endpoint returns `422`. A request already in progress returns `409` with `Retry-After: 1`. Definitive 4xx responses are stored so they can be replayed; 5xx responses remove the key and allow the retry to run again. The browser keeps keys for network errors and timeouts, clears them after success or definitive 4xx results, and releases its submission lock in `finally`.
 
-Stock movements require a non-empty reason. Changes of 50 units or more require `confirmedLargeChange: true` and are copied to `stock_change_archives`. Product images accept verified JPEG, PNG, or WebP uploads up to 2 MB, replace and remove the private stored file, and are served only through the catalog/owner image routes.
+Stock movements require a reason. The reason `Other` and large changes require a note. The owner-configurable `largeChangeThreshold` setting defaults to 20 units; a movement is large at the smaller of that threshold and 50% of pre-change stock. Large movements require `confirmedLargeChange: true`. Every owner stock movement is recorded in `stock_change_archives`; the paginated archive endpoint supports product, type, reason, date-range, and large-only filters, and the CSV endpoint accepts the same filters. Product images accept verified JPEG, PNG, or WebP uploads up to 2 MB, replace and remove the private stored file, and are served only through the catalog/owner image routes.
 
 Order-ready and completion messages are fulfillment-specific. Delivery orders use delivery/handoff language; pickup orders use “Ready for pickup,” “Picked up,” or “Handed over and paid” and omit delivery address/fee data. No packing-slip or order-email renderer is currently exposed by this API.

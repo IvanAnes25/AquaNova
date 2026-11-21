@@ -3,12 +3,12 @@ import { stockLabel } from '../lib/format.js';
 import { ProductImage } from './ProductGrid.jsx';
 import { Status } from './UI.jsx';
 
-export function InventoryTable({ products, onStock }) {
+export function InventoryTable({ products, onStock, onHistory }) {
   return <div className="table-scroll"><table><thead><tr><th>PRODUCT</th><th>CATEGORY</th><th>SKU</th><th>STOCK ON HAND</th><th>STATUS</th><th /></tr></thead>
     <tbody>{products.map((product) => <tr key={product.id}>
       <td><div className="table-person inventory-product"><ProductImage product={product} /><b>{product.name}</b></div></td>
       <td>{product.category}</td><td className="sku">{product.id.toUpperCase()}</td><td><b className="stock-number">{product.stock}</b> <span className="muted">units</span></td>
-      <td><Status>{stockLabel(product.stock)}</Status></td><td><button className="text-button" onClick={() => onStock(product)}>Update <Icon name="arrow" size={14} /></button></td>
+      <td><Status>{stockLabel(product.stock)}</Status></td><td><div className="inventory-row-actions"><button className="text-button" aria-label={`History for ${product.name}`} onClick={() => onHistory(product)}>History</button><button className="text-button" onClick={() => onStock(product)}>Update <Icon name="arrow" size={14} /></button></div></td>
     </tr>)}</tbody>
   </table></div>;
 }

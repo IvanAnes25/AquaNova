@@ -95,6 +95,10 @@ try {
         }
     } elseif ($segments === ['owner', 'inventory'] && $method === 'GET') {
         $controller->inventory();
+    } elseif ($segments === ['owner', 'inventory', 'archives'] && $method === 'GET') {
+        $controller->stockArchives();
+    } elseif ($segments === ['owner', 'inventory', 'archives.csv'] && $method === 'GET') {
+        $controller->downloadStockArchives();
     } elseif ($segments === ['owner', 'inventory', 'movements'] && $method === 'POST') {
         $controller->moveStock();
     } elseif ($segments === ['owner', 'customers'] && $method === 'GET') {

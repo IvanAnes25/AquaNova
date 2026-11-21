@@ -109,7 +109,7 @@ All commerce routes use `/api/v1`. Responses are JSON unless a route explicitly 
 | `POST` | `/api/v1/orders/{id}/payment-proof` | Owning customer | Submit a GCash reference and JPG/PNG proof (maximum 2 MB) |
 | `GET` | `/api/v1/orders/{id}/payment-proof/image` | Owning customer or owner | View a stored proof |
 | `GET`, `PATCH` | `/api/v1/account/profile` | Customer | Read or update profile and default address |
-| `POST` | `/api/v1/account/password` | Signed-in user | Change the temporary first-login password |
+| `POST` | `/api/v1/account/password` | Signed-in customer or owner | Change the password using the current password; failed attempts are rate-limited, other sessions end, and the change is audited |
 | `GET` | `/api/v1/notifications` | Signed-in user | List notifications |
 | `GET` | `/api/v1/notifications/unread-count` | Signed-in user | Count unread notifications |
 | `PATCH` | `/api/v1/notifications/{id}/read` | Signed-in user | Mark one notification as read |

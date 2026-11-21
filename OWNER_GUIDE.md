@@ -14,7 +14,7 @@ Order status and payment status are separate. GCash approval marks payment Paid,
 
 ## Products and inventory
 
-Use **Products** to add catalog items and upload, replace, or remove a JPEG, PNG, or WebP product image. In **Inventory**, sold-out and lower-stock products appear first by default; choose a product, enter a required reason and optional note, and save the stock movement. Changes of 50 units or more require confirmation and are recorded in the large-change archive. Check the movement history after saving; do not make manual database stock edits.
+Use **Products** to add catalog items and upload, replace, or remove a JPEG, PNG, or WebP product image. In **Inventory**, sold-out and lower-stock products appear first by default; choose a product, enter a reason, and save the stock movement. The reason **Other** and large changes require a note. In **Settings**, configure the large-change threshold (default 20 units); a change is large at the smaller of this threshold or 50% of the product's pre-change stock. Large changes require confirmation. Every owner movement is archived; filter the archive by product, type, reason, date range, or large changes only, export the filtered CSV, or open a product's movement history. Do not make manual database stock edits.
 
 ## Settings and reports
 

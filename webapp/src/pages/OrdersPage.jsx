@@ -50,6 +50,17 @@ export default function OrdersPage({
   const visibleOrders = sortedOrders.filter(activeTab.matches);
   const selectedOrder = visibleOrders.find((order) => order.id === selectedOrderId) || null;
   const nextOrder = () => {
+    if (filter === 'Needs action') {
+      const actionable = visibleOrders.filter(hasNextAction);
+      if (!actionable.length) {
+        setSelectedOrderId(null);
+        return;
+      }
+      const currentIndex = actionable.findIndex((order) => order.id === selectedOrderId);
+      const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % actionable.length;
+      setSelectedOrderId(actionable[nextIndex].id);
+      return;
+    }
     const currentIndex = visibleOrders.findIndex((order) => order.id === selectedOrderId);
     const following = visibleOrders.slice(currentIndex + 1).find(hasNextAction)
       || visibleOrders.find(hasNextAction)
@@ -60,9 +71,24 @@ export default function OrdersPage({
 
   useEffect(() => {
     if (!selectedOrder) {
-      setSelectedOrderId(visibleOrders.find(hasNextAction)?.id || visibleOrders[0]?.id || null);
+      const actionableInTab = visibleOrders.find(hasNextAction);
+      if (actionableInTab) {
+        if (selectedOrderId !== actionableInTab.id) setSelectedOrderId(actionableInTab.id);
+        return;
+      }
+      if (filter === 'Needs action') {
+        const nextActionable = sortedOrders.find(hasNextAction);
+        if (nextActionable) {
+          const nextTab = orderTabs.find((tab) => tab.matches(nextActionable))?.label;
+          if (nextTab && nextTab !== filter) setFilter(nextTab);
+          if (selectedOrderId !== nextActionable.id) setSelectedOrderId(nextActionable.id);
+          return;
+        }
+      }
+      const nextId = filter === 'Needs action' ? null : visibleOrders[0]?.id || null;
+      if (selectedOrderId !== nextId) setSelectedOrderId(nextId);
     }
-  }, [selectedOrder, setSelectedOrderId, visibleOrders]);
+  }, [filter, selectedOrder, selectedOrderId, setFilter, setSelectedOrderId, sortedOrders, visibleOrders]);
 
   const action = selectedOrder && nextAction(selectedOrder);
   const runAction = async () => {

@@ -19,6 +19,12 @@ $projectPath = '/' . basename($projectRoot);
 $apiPath = $projectPath . '/api/v1';
 $requestPath = rawurldecode((string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH));
 if ($requestPath === $projectPath . '/api/test/smtp-config') {
+    $expectedDatabase = $_GET['expectedDatabase'] ?? null;
+    if ($expectedDatabase !== null && $expectedDatabase !== $databaseName) {
+        http_response_code(503);
+        echo 'The API test router is connected to a different isolated database.';
+        return true;
+    }
     header('Content-Type: application/json');
     echo json_encode([
         'mailHost' => getenv('AQUATICA_TEST_MAIL_HOST') ?: '',

@@ -471,8 +471,9 @@ test('GCash proof rejection, duplicate reference, re-upload, approval, and next-
     await selectOrder(ownerPage, first);
     await ownerPage.getByRole('button', { name: 'Check proof' }).click();
     await doubleClickOnce(ownerPage, ownerPage.getByRole('dialog').getByRole('button', { name: 'Approve' }), 'POST', /\/api\/v1\/owner\/orders\/\d+\/actions$/);
-    await expect(ownerPage.locator('.order-inbox-detail h2')).toHaveText(second.id);
-    const snapshot = inspect();
+    await expect(ownerPage.locator('.order-inbox-detail h2')).toHaveText(first.id);
+    await expect(ownerPage.getByRole('button', { name: 'Mark as ready' })).toBeVisible();
+    let snapshot = inspect();
     expect(orderRecord(snapshot, first.databaseId)).toMatchObject({
       order_status: 'preparing',
       payment_status: 'paid',
@@ -481,6 +482,25 @@ test('GCash proof rejection, duplicate reference, re-upload, approval, and next-
     expect(snapshot.movements.filter((movement) => Number(movement.order_id) === first.databaseId && movement.type === 'sale'))
       .toHaveLength(1);
     expect(snapshot.proofs.filter((proof) => Number(proof.order_id) === first.databaseId)).toHaveLength(2);
+
+    await ownerPage.getByRole('tab', { name: /Needs action/ }).click();
+    await selectOrder(ownerPage, second);
+    await ownerPage.getByRole('button', { name: 'Check proof' }).click();
+    const secondApprovalResponse = ownerPage.waitForResponse((response) =>
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/v1/owner/orders/${second.databaseId}/actions`);
+    await ownerPage.getByRole('dialog').getByRole('button', { name: 'Approve' }).click();
+    expect((await secondApprovalResponse).status()).toBe(200);
+    await expect(ownerPage.locator('.order-inbox-detail h2')).toHaveText(second.id);
+    await expect(ownerPage.getByRole('button', { name: 'Mark as ready' })).toBeVisible();
+    snapshot = inspect();
+    expect(orderRecord(snapshot, second.databaseId)).toMatchObject({
+      order_status: 'preparing',
+      payment_status: 'paid',
+      stock_deducted: 1,
+    });
+    expect(snapshot.movements.filter((movement) => Number(movement.order_id) === second.databaseId && movement.type === 'sale'))
+      .toHaveLength(1);
   } finally {
     await ownerContext.close();
   }
@@ -658,10 +678,10 @@ test('owner records stock reasons and manages product images', async ({ page, br
   await page.getByRole('button', { name: 'Restock' }).click();
   await page.locator('.modal-form select').first().selectOption(String(fixture.products.main.slug));
   await page.locator('.modal-form input[type="number"]').fill('5');
-  await page.locator('.modal-form input[placeholder="e.g. Supplier delivery"]').fill('Supplier delivery');
+  await page.locator('.modal-form input[placeholder="e.g. Supplier delivery or Other"]').fill('Supplier delivery');
   await page.locator('.modal-form input').last().fill('E2E stock batch');
   await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Restock' }), 'POST', /\/api\/v1\/owner\/inventory\/movements$/);
-  await expect(page.getByText('Supplier delivery')).toBeVisible();
+  await expect(page.getByText('Supplier delivery', { exact: true })).toBeVisible();
   const afterStock = inspect();
   expect(afterStock.movements.filter((movement) => movement.reason === 'Supplier delivery: E2E stock batch'))
     .toHaveLength(1);
@@ -670,7 +690,7 @@ test('owner records stock reasons and manages product images', async ({ page, br
   await page.locator('.modal-form select').first().selectOption(String(fixture.products.main.slug));
   await page.locator('.modal-form select').nth(1).selectOption('Adjustment');
   await page.locator('.modal-form input[type="number"]').fill('1');
-  await page.locator('.modal-form input[placeholder="e.g. Supplier delivery"]').fill('E2E adjustment');
+  await page.locator('.modal-form input[placeholder="e.g. Supplier delivery or Other"]').fill('E2E adjustment');
   await page.locator('.modal-form input').last().fill('double-click coverage');
   await doubleClickOnce(page, page.getByRole('dialog').getByRole('button', { name: 'Adjust stock' }), 'POST', /\/api\/v1\/owner\/inventory\/movements$/);
   expect(inspect().movements.filter((movement) => movement.reason === 'E2E adjustment: double-click coverage'))
@@ -688,7 +708,7 @@ test('owner records stock reasons and manages product images', async ({ page, br
   await expect(page.locator('.owner-product-card').filter({ hasText: createdProductName })).toHaveCount(1);
 
   const productCard = page.locator('.owner-product-card').filter({ hasText: fixture.products.main.name });
-  await productCard.getByRole('button', { name: 'Upload image' }).click();
+  await productCard.getByRole('button', { name: 'Replace image' }).click();
   await page.locator('input[type="file"]').setInputFiles({
     name: 'product.png',
     mimeType: 'image/png',

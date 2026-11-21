@@ -1805,6 +1805,142 @@ final class CommerceController
         ]);
     }
 
+    private function stockArchiveFilters(): array
+    {
+        $where = ' WHERE 1 = 1';
+        $params = [];
+        $productFilter = trim((string) ($_GET['productId'] ?? ''));
+        if ($productFilter !== '') {
+            $where .= ' AND a.product_id = :product_id';
+            $params['product_id'] = $this->productId($productFilter);
+        }
+
+        $type = trim((string) ($_GET['type'] ?? ''));
+        if ($type !== '') {
+            if (!in_array($type, ['restock', 'adjustment'], true)) {
+                json_response(['message' => 'Choose a valid stock movement type.'], 422);
+            }
+            $where .= ' AND sm.type = :type';
+            $params['type'] = $type;
+        }
+
+        $reason = trim((string) ($_GET['reason'] ?? ''));
+        if (strlen($reason) > 200) {
+            json_response(['message' => 'The stock reason filter is too long.'], 422);
+        }
+        if ($reason !== '') {
+            $where .= ' AND a.reason LIKE :reason';
+            $params['reason'] = '%' . $reason . '%';
+        }
+
+        $from = trim((string) ($_GET['from'] ?? ''));
+        $to = trim((string) ($_GET['to'] ?? ''));
+        foreach (['from' => $from, 'to' => $to] as $label => $date) {
+            if ($date !== '') {
+                $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $date, new DateTimeZone('UTC'));
+                if (!$parsed || $parsed->format('Y-m-d') !== $date) {
+                    json_response(['message' => 'Enter archive dates in YYYY-MM-DD format.'], 422);
+                }
+            }
+        }
+        if ($from !== '' && $to !== '' && $from > $to) {
+            json_response(['message' => 'The archive start date must not be after the end date.'], 422);
+        }
+        if ($from !== '') {
+            $where .= ' AND a.created_at >= :from_date';
+            $params['from_date'] = $from . ' 00:00:00';
+        }
+        if ($to !== '') {
+            $where .= ' AND a.created_at < DATE_ADD(:to_date, INTERVAL 1 DAY)';
+            $params['to_date'] = $to;
+        }
+
+        $largeOnly = trim((string) ($_GET['largeOnly'] ?? ''));
+        if (!in_array($largeOnly, ['', '0', '1'], true)) {
+            json_response(['message' => 'The large-only archive filter must be true or false.'], 422);
+        }
+        if ($largeOnly === '1') {
+            $where .= ' AND a.confirmed_large_change = 1';
+        }
+
+        return [$where, $params];
+    }
+
+    private function stockArchiveSelect(): string
+    {
+        return 'SELECT a.id, a.movement_id, a.product_id, p.name AS product, p.slug AS product_slug,
+                       sm.type, a.change_qty, a.stock_before, a.stock_after, a.reason, a.note,
+                       a.confirmed_large_change, a.created_at
+                FROM stock_change_archives a
+                JOIN products p ON p.id = a.product_id
+                LEFT JOIN stock_movements sm ON sm.id = a.movement_id';
+    }
+
+    public function stockArchives(): never
+    {
+        $this->owner();
+        [$where, $params] = $this->stockArchiveFilters();
+        $result = $this->paginatedQuery(
+            $this->stockArchiveSelect() . $where . ' ORDER BY a.id DESC',
+            'SELECT COUNT(*) FROM stock_change_archives a
+             JOIN products p ON p.id = a.product_id
+             LEFT JOIN stock_movements sm ON sm.id = a.movement_id' . $where,
+            $params
+        );
+        json_response([
+            'archives' => array_map(static fn(array $row): array => [
+                'id' => (int) $row['id'],
+                'movementId' => $row['movement_id'] === null ? null : (int) $row['movement_id'],
+                'productId' => (string) $row['product_slug'],
+                'product' => (string) $row['product'],
+                'type' => (string) ($row['type'] ?? ''),
+                'change' => (int) $row['change_qty'],
+                'stockBefore' => (int) $row['stock_before'],
+                'stockAfter' => (int) $row['stock_after'],
+                'reason' => (string) $row['reason'],
+                'note' => (string) $row['note'],
+                'large' => (bool) $row['confirmed_large_change'],
+                'date' => (string) $row['created_at'],
+            ], $result['rows']),
+            'pagination' => $result['pagination'],
+        ]);
+    }
+
+    public function downloadStockArchives(): never
+    {
+        $this->owner();
+        [$where, $params] = $this->stockArchiveFilters();
+        $statement = $this->db()->prepare(
+            $this->stockArchiveSelect() . $where . ' ORDER BY a.id DESC'
+        );
+        $statement->execute($params);
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="aquatica-stock-archive.csv"');
+        header('Cache-Control: no-store, private');
+        $output = fopen('php://output', 'wb');
+        if ($output === false) {
+            throw new RuntimeException('Stock archive export could not be opened.');
+        }
+        fwrite($output, "\xEF\xBB\xBF");
+        fputcsv($output, ['Product', 'Type', 'Change', 'Stock before', 'Stock after', 'Reason', 'Note', 'Large change', 'Date']);
+        while ($row = $statement->fetch()) {
+            $csvRow = [
+                $row['product'],
+                $row['type'] ?? '',
+                (int) $row['change_qty'],
+                (int) $row['stock_before'],
+                (int) $row['stock_after'],
+                $row['reason'],
+                $row['note'],
+                (int) $row['confirmed_large_change'] === 1 ? 'Yes' : 'No',
+                $row['created_at'],
+            ];
+            fputcsv($output, array_map(fn(mixed $cell): string => $this->reportCsvCell($cell), $csvRow));
+        }
+        fclose($output);
+        exit;
+    }
+
     public function moveStock(): never
     {
         $owner = $this->owner();
@@ -1820,8 +1956,8 @@ final class CommerceController
             || $reason === '' || strlen($reason) > 500 || strlen($note) > 500) {
             json_response(['message' => 'Enter a valid stock movement and reason.'], 422);
         }
-        if (abs($amount) >= 50 && !$confirmedLargeChange) {
-            json_response(['message' => 'Large stock changes require confirmation.'], 422);
+        if (strcasecmp($reason, 'Other') === 0 && $note === '') {
+            json_response(['message' => 'A note is required when the stock reason is Other.'], 422);
         }
         $db = $this->db();
         $db->beginTransaction();
@@ -1833,34 +1969,49 @@ final class CommerceController
             $db->rollBack();
             json_response(['message' => 'Product not found.'], 404);
         }
-        $after = (int) $product['stock'] + $amount;
+        $stockBefore = (int) $product['stock'];
+        $configuredThreshold = filter_var($this->setting('large_change_threshold', '20'), FILTER_VALIDATE_INT);
+        if ($configuredThreshold === false || $configuredThreshold < 1 || $configuredThreshold > 100000) {
+            $db->rollBack();
+            throw new RuntimeException('The large stock-change threshold setting is invalid.');
+        }
+        $effectiveThreshold = min((float) $configuredThreshold, $stockBefore / 2);
+        $largeChange = abs($amount) >= $effectiveThreshold;
+        if ($largeChange && $note === '') {
+            $db->rollBack();
+            json_response(['message' => 'A note is required for large stock changes.'], 422);
+        }
+        if ($largeChange && !$confirmedLargeChange) {
+            $db->rollBack();
+            json_response(['message' => 'Large stock changes require confirmation.'], 422);
+        }
+        $after = $stockBefore + $amount;
         if ($after < 0) {
             $db->rollBack();
             json_response(['message' => 'Stock cannot fall below zero.'], 409);
         }
         $db->prepare('UPDATE products SET stock = :stock WHERE id = :id')->execute(['stock' => $after, 'id' => $id]);
-        $movementId = $this->insertMovement($id, $product['name'], $amount, (int) $product['stock'], $after, $type, $reason . ($note !== '' ? ': ' . $note : ''), null, (int) $owner['id']);
-        if (abs($amount) >= 50) {
-            $archive = $db->prepare(
-                'INSERT INTO stock_change_archives
-                 (movement_id, product_id, actor_user_id, change_qty, stock_before, stock_after, reason, note, confirmed_large_change)
-                 VALUES (:movement_id, :product_id, :actor, :change, :before, :after, :reason, :note, 1)'
-            );
-            $archive->execute([
-                'movement_id' => $movementId,
-                'product_id' => $id,
-                'actor' => (int) $owner['id'],
-                'change' => $amount,
-                'before' => (int) $product['stock'],
-                'after' => $after,
-                'reason' => $reason,
-                'note' => $note,
-            ]);
-        }
+        $movementId = $this->insertMovement($id, $product['name'], $amount, $stockBefore, $after, $type, $reason . ($note !== '' ? ': ' . $note : ''), null, (int) $owner['id']);
+        $archive = $db->prepare(
+            'INSERT INTO stock_change_archives
+             (movement_id, product_id, actor_user_id, change_qty, stock_before, stock_after, reason, note, confirmed_large_change)
+             VALUES (:movement_id, :product_id, :actor, :change, :before, :after, :reason, :note, :large)'
+        );
+        $archive->execute([
+            'movement_id' => $movementId,
+            'product_id' => $id,
+            'actor' => (int) $owner['id'],
+            'change' => $amount,
+            'before' => $stockBefore,
+            'after' => $after,
+            'reason' => $reason,
+            'note' => $note,
+            'large' => $largeChange ? 1 : 0,
+        ]);
         $this->notifyLowStock(
             $id,
             (string) $product['name'],
-            (int) $product['stock'],
+            $stockBefore,
             $after,
             (int) $product['low_stock_threshold']
         );
@@ -2348,7 +2499,7 @@ final class CommerceController
     private function reportCsvCell(mixed $value): string
     {
         $cell = (string) $value;
-        if ($cell !== '' && in_array($cell[0], ['=', '+', '-', '@'], true)) {
+        if ($cell !== '' && preg_match('/^[\x00-\x20]*[=+\-@]/', $cell) === 1) {
             return "'" . $cell;
         }
         return $cell;
@@ -2455,6 +2606,9 @@ final class CommerceController
                 && !empty($settings['gcash_name']) && !empty($settings['gcash_number']) && !empty($settings['gcash_qr_path']),
             'gcashQrUrl' => !empty($settings['gcash_qr_path']) ? '/api/v1/owner/settings/gcash-qr' : null,
             'autoCancelHours' => isset($settings['auto_cancel_hours']) ? (int) $settings['auto_cancel_hours'] : null,
+            'largeChangeThreshold' => isset($settings['large_change_threshold'])
+                ? (int) $settings['large_change_threshold']
+                : 20,
             'shopHours' => $this->shopHours($settings),
             'shopOpenOverride' => $settings['shop_open_override'] ?? 'scheduled',
             'shopClosedMessage' => $settings['shop_closed_message'] ?? '',
@@ -2485,7 +2639,7 @@ final class CommerceController
         $allowedFields = array_merge(
             array_keys($fields),
             array_keys($flagFields),
-            ['deliveryFee', 'autoCancelHours', 'shopHours', 'shopOpenOverride']
+            ['deliveryFee', 'autoCancelHours', 'largeChangeThreshold', 'shopHours', 'shopOpenOverride']
         );
         if (array_diff(array_keys($data), $allowedFields)) {
             json_response(['message' => 'The settings request contains unsupported fields.'], 422);
@@ -2561,6 +2715,13 @@ final class CommerceController
                 }
                 $validated['auto_cancel_hours'] = (string) $hours;
             }
+        }
+        if (array_key_exists('largeChangeThreshold', $data)) {
+            $threshold = filter_var($data['largeChangeThreshold'], FILTER_VALIDATE_INT);
+            if ($threshold === false || $threshold < 1 || $threshold > 100000) {
+                json_response(['message' => 'The large stock-change threshold must be between 1 and 100,000 units.'], 422);
+            }
+            $validated['large_change_threshold'] = (string) $threshold;
         }
         if (!$data) {
             json_response(['message' => 'Provide at least one setting to update.'], 422);

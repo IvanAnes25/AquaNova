@@ -5,7 +5,7 @@ import { Button, Field, Modal, SkeletonRoute } from './components/UI.jsx';
 import { money } from './lib/format.js';
 import { orderNeedsAction } from './data.js';
 import { authGet, authPost } from './lib/authApi.js';
-import { commerceGet, commerceGetAll, commerceRequest, createIdempotencyKey } from './lib/commerceApi.js';
+import { commerceGet, commerceGetAll, commerceRequest, createIdempotencyKey, downloadStockArchives } from './lib/commerceApi.js';
 import { commercePath } from './lib/commerceApi.js';
 import AccountPage from './pages/AccountPage.jsx';
 import CartPage from './pages/CartPage.jsx';
@@ -59,6 +59,12 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [cart, setCart] = useState([]);
   const [movements, setMovements] = useState([]);
+  const [stockArchives, setStockArchives] = useState([]);
+  const [stockArchivePagination, setStockArchivePagination] = useState(null);
+  const [stockArchiveFilters, setStockArchiveFilters] = useState({
+    productId: '', type: '', reason: '', from: '', to: '', largeOnly: false,
+  });
+  const [stockArchivePage, setStockArchivePage] = useState(1);
   const [settings, setSettings] = useState({ deliveryFee: 0, gcashReady: false });
   const [report, setReport] = useState(null);
   const [customers, setCustomers] = useState([]);
@@ -240,6 +246,26 @@ export default function App() {
     window.addEventListener('popstate', restoreShopFilters);
     return () => window.removeEventListener('popstate', restoreShopFilters);
   }, [role]);
+  const loadStockArchives = async (filters, targetPage) => {
+    const params = new URLSearchParams({ page: String(targetPage), pageSize: '20' });
+    for (const [key, value] of Object.entries(filters)) {
+      if (value) params.set(key, key === 'largeOnly' ? '1' : String(value));
+    }
+    const archiveData = await commerceGet(`/owner/inventory/archives?${params}`);
+    setStockArchives(archiveData.archives);
+    setStockArchivePagination(archiveData.pagination);
+    setStockArchivePage(Number(archiveData.pagination?.page) || targetPage);
+    return archiveData;
+  };
+  const queryStockArchives = async (filters, targetPage = 1) => {
+    setStockArchiveFilters(filters);
+    setStockArchivePage(targetPage);
+    try {
+      await loadStockArchives(filters, targetPage);
+    } catch (error) {
+      notify(error.message, () => queryStockArchives(filters, targetPage));
+    }
+  };
   async function reloadWorkspace(currentRole = role) {
     workspaceLoadCount.current += 1;
     setWorkspaceLoading(true);
@@ -268,12 +294,13 @@ export default function App() {
         return;
       }
       if (currentRole === 'owner') {
-        const [catalog, inventory, orderData, settingsData, customerData, reportData, notificationData, notificationCount] = await Promise.all([
+        const [catalog, inventory, archiveData, orderData, settingsData, customerData, reportData, notificationData, notificationCount] = await Promise.all([
           commerceGetAll('/owner/products', ['products']),
           commerceGetAll('/owner/inventory', [
             { key: 'products', pageKey: 'productsPage', sizeKey: 'productsPageSize', metaKey: 'productsPagination' },
             { key: 'movements', pageKey: 'movementsPage', sizeKey: 'movementsPageSize', metaKey: 'movementsPagination' },
           ]),
+          loadStockArchives(stockArchiveFilters, stockArchivePage),
           commerceGetAll('/owner/orders', ['orders']),
           commerceGet('/owner/settings'),
           commerceGetAll('/owner/customers', ['customers']),
@@ -283,6 +310,8 @@ export default function App() {
         ]);
         setProducts(catalog.products);
         setMovements(inventory.movements);
+        setStockArchives(archiveData.archives);
+        setStockArchivePagination(archiveData.pagination);
         setOrders(orderData.orders);
         setSettings(settingsData.settings);
         setCustomers(customerData.customers);
@@ -341,11 +370,13 @@ export default function App() {
     if (nextPage === 'cart' && pendingCartUpdate.current) {
       await pendingCartUpdate.current;
     }
-    const requiredRole = ownerPages.includes(nextPage)
-      ? 'owner'
-      : [...customerPages, 'checkout', 'payment', 'order-detail', 'order-placed', 'proof-submitted'].includes(nextPage)
-        ? 'customer'
-        : null;
+    const requiredRole = nextPage === 'account'
+      ? role
+      : ownerPages.includes(nextPage)
+        ? 'owner'
+        : [...customerPages, 'checkout', 'payment', 'order-detail', 'order-placed', 'proof-submitted'].includes(nextPage)
+          ? 'customer'
+          : null;
     if (!role || !user) {
       setPage('login');
       return;
@@ -400,6 +431,8 @@ export default function App() {
         await commerceRequest(`/owner/orders/${order.databaseId}/actions`, 'POST', { action: 'cancel', reason }, requestKey(scope));
         await reloadWorkspace('owner');
         clearRequestKey(scope);
+        setOrderFilter('Needs action');
+        setActiveOrderId(null);
       } else {
         await commerceRequest(`/orders/${order.databaseId}/cancel`, 'POST', { reason }, requestKey(scope));
         await reloadWorkspace('customer');
@@ -526,6 +559,16 @@ export default function App() {
       setModal(null);
       setRejectReason('');
       setCancelReason('');
+      if (['approve_proof', 'confirm_cash'].includes(action)) {
+        setOrderFilter('Preparing');
+        setActiveOrderId(order.id);
+      } else if (action === 'mark_ready') {
+        setOrderFilter('Ready');
+        setActiveOrderId(order.id);
+      } else if (['complete', 'cancel', 'reject_proof'].includes(action)) {
+        setOrderFilter('Needs action');
+        setActiveOrderId(null);
+      }
       notify(`Order ${order.id} updated.`);
     } catch (error) {
       clearDefinitiveRequestKey(scope, error);
@@ -565,6 +608,11 @@ export default function App() {
     if (stockSaveLock.current) return;
     const amount = Number(stockForm.quantity);
     const product = products.find((item) => item.id === stockForm.productId);
+    const largeChangeThreshold = product
+      ? Math.min(Number(settings.largeChangeThreshold ?? 20), product.stock / 2)
+      : Number(settings.largeChangeThreshold ?? 20);
+    const largeChange = amount > 0 && amount >= largeChangeThreshold;
+    const needsNote = stockForm.reasonText.trim().toLowerCase() === 'other' || largeChange;
     if (!product || !Number.isInteger(amount) || amount <= 0) {
       notify('Choose a product and enter a whole-number quantity greater than zero.');
       return;
@@ -573,7 +621,11 @@ export default function App() {
       notify('A reason is required for every stock change.');
       return;
     }
-    if (amount >= 50 && !stockForm.confirmLargeChange) {
+    if (needsNote && !stockForm.note.trim()) {
+      notify('A note is required for Other reasons and large stock changes.');
+      return;
+    }
+    if (largeChange && !stockForm.confirmLargeChange) {
       notify('Confirm the large stock change before saving.');
       return;
     }
@@ -586,8 +638,8 @@ export default function App() {
         quantity: stockForm.reason === 'Adjustment' ? -amount : amount,
         type: stockForm.reason === 'Adjustment' ? 'adjustment' : 'restock',
         reason: stockForm.reasonText.trim(),
-        note: stockForm.note,
-        confirmedLargeChange: amount >= 50 ? Boolean(stockForm.confirmLargeChange) : true,
+        note: stockForm.note.trim(),
+        confirmedLargeChange: largeChange ? Boolean(stockForm.confirmLargeChange) : false,
       }, requestKey(scope));
       await reloadWorkspace('owner');
       clearRequestKey(scope);
@@ -700,6 +752,9 @@ export default function App() {
       notify(error.message, () => saveAccountProfile());
     }
   };
+  const changeAccountPassword = async (values) => {
+    await authPost('/api/v1/account/password', values);
+  };
   const runNotificationMutation = async (path, method, body = {}) => {
     const perform = async () => {
       try {
@@ -739,10 +794,30 @@ export default function App() {
       loading={workspaceLoading}
     />; break;
     case 'products': content = <ProductsPage products={products} category={category} setCategory={setCategory} query={query} setQuery={setQuery} onAddProduct={() => runOwnerAction(() => setModal({ type: 'product' }))} onStock={(product) => runOwnerAction(() => openStockForm(product))} onImage={(product, remove = false) => runOwnerAction(() => remove ? removeProductImage(product) : openProductImage(product))} loading={catalogLoading || workspaceLoading} />; break;
-    case 'inventory': content = <InventoryPage products={products} movements={movements} query={query} setQuery={setQuery} onStock={(product, reason) => runOwnerAction(() => openStockForm(product, reason))} loading={workspaceLoading} />; break;
+    case 'inventory': content = <InventoryPage
+      products={products}
+      movements={movements}
+      archives={stockArchives}
+      archivePagination={stockArchivePagination}
+      archiveFilters={stockArchiveFilters}
+      archivePage={stockArchivePage}
+      onArchiveSearch={queryStockArchives}
+      onArchivePage={(targetPage) => queryStockArchives(stockArchiveFilters, targetPage)}
+      onDownloadArchive={async (filters) => {
+        try {
+          await downloadStockArchives(filters);
+        } catch (error) {
+          notify(error.message);
+        }
+      }}
+      query={query}
+      setQuery={setQuery}
+      onStock={(product, reason) => runOwnerAction(() => openStockForm(product, reason))}
+      loading={workspaceLoading}
+    />; break;
     case 'customers': content = <CustomersPage customers={customers} query={query} setQuery={setQuery} onToast={notify} loading={workspaceLoading} />; break;
     case 'reports': content = <ReportsPage products={products} report={report} onToast={notify} />; break;
-    case 'account': content = <AccountPage customer={customer} setCustomer={setCustomer} onSave={saveAccountProfile} onToast={notify} />; break;
+    case 'account': content = <AccountPage customer={customer} user={user} role={role} setCustomer={setCustomer} onSave={saveAccountProfile} onChangePassword={changeAccountPassword} onToast={notify} />; break;
     case 'settings': content = <SettingsPage settings={settings} onSave={async (values, qrFile) => { const doSave = async () => { try { await commerceRequest('/owner/settings', 'PATCH', values); if (qrFile) { const form = new FormData(); form.append('qr', qrFile); await commerceRequest('/owner/settings/gcash-qr', 'POST', form); } await reloadWorkspace('owner'); notify('Settings saved.'); } catch (error) { notify(error.message, () => doSave()); } }; await doSave(); }} onToast={notify} />; break;
     case 'notifications': content = <NotificationsPage
       notifications={notifications}
@@ -780,7 +855,7 @@ export default function App() {
     </header><div className="content-area">{accessLoading ? <SkeletonRoute /> : selectedProduct ? <ProductDetails product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={addToCart} /> : content}</div>
     <footer className="app-footer"><span>© 2026 Aquatica Nasugbu</span><span>Made for little pieces of the ocean <i>✳</i></span></footer></main>
     {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}{toastRetry && <button className="toast-retry" onClick={() => { const retry = toastRetry; setToast(''); setToastRetry(null); retry(); }}>Retry</button>}<button aria-label="Dismiss notification" onClick={() => { setToast(''); setToastRetry(null); }}><Icon name="close" size={15} /></button></div>}
-    {modal && <AppModal modal={modal} onClose={() => setModal(null)} onRejectOpen={(order) => openPaymentReview(order, 'reject')} productForm={productForm} setProductForm={setProductForm} stockForm={stockForm} setStockForm={setStockForm} savingProduct={savingProduct} savingStock={savingStock} productImageFile={productImageFile} setProductImageFile={setProductImageFile} savingImage={savingImage} onSaveProductImage={saveProductImage} onRemoveProductImage={removeProductImage} products={products} rejectReason={rejectReason} setRejectReason={setRejectReason} cancelReason={cancelReason} setCancelReason={setCancelReason} onSaveProduct={(event) => { event.preventDefault(); runOwnerAction(() => saveProduct(), () => saveProduct()); }} onSaveStock={(event) => { event.preventDefault(); runOwnerAction(() => saveStock(), () => saveStock()); }} onReject={(order) => runOwnerAction(() => rejectPayment(order), () => rejectPayment(order))} onApprove={(order) => runOwnerAction(() => approvePayment(order), () => approvePayment(order))} onCancel={(order) => cancelOrder(order, cancelReason)} />}
+    {modal && <AppModal modal={modal} onClose={() => setModal(null)} onRejectOpen={(order) => openPaymentReview(order, 'reject')} productForm={productForm} setProductForm={setProductForm} stockForm={stockForm} setStockForm={setStockForm} savingProduct={savingProduct} savingStock={savingStock} productImageFile={productImageFile} setProductImageFile={setProductImageFile} savingImage={savingImage} onSaveProductImage={saveProductImage} onRemoveProductImage={removeProductImage} products={products} settings={settings} rejectReason={rejectReason} setRejectReason={setRejectReason} cancelReason={cancelReason} setCancelReason={setCancelReason} onSaveProduct={(event) => { event.preventDefault(); runOwnerAction(() => saveProduct(), () => saveProduct()); }} onSaveStock={(event) => { event.preventDefault(); runOwnerAction(() => saveStock(), () => saveStock()); }} onReject={(order) => runOwnerAction(() => rejectPayment(order), () => rejectPayment(order))} onApprove={(order) => runOwnerAction(() => approvePayment(order), () => approvePayment(order))} onCancel={(order) => cancelOrder(order, cancelReason)} />}
   </div>;
 }
 
@@ -799,7 +874,14 @@ function Confirmation({ icon, title, text, onOrders, onShop }) {
   return <div className="centered-state"><span className="success-icon"><Icon name={icon} size={24} /></span><div className="eyebrow">AQUATICA NASUGBU</div><h1>{title}</h1><p>{text}</p><div className="centered-actions"><Button onClick={onOrders}>View my orders <Icon name="arrow" size={16} /></Button><button className="text-button" onClick={onShop}>Continue shopping</button></div></div>;
 }
 
-function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, stockForm, setStockForm, savingProduct, savingStock, productImageFile, setProductImageFile, savingImage, onSaveProductImage, onRemoveProductImage, products, rejectReason, setRejectReason, cancelReason, setCancelReason, onSaveProduct, onSaveStock, onReject, onApprove, onConfirm, onReceived, onCancel, onStatus }) {
+function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, stockForm, setStockForm, savingProduct, savingStock, productImageFile, setProductImageFile, savingImage, onSaveProductImage, onRemoveProductImage, products, settings, rejectReason, setRejectReason, cancelReason, setCancelReason, onSaveProduct, onSaveStock, onReject, onApprove, onConfirm, onReceived, onCancel, onStatus }) {
+  const selectedStockProduct = products.find((product) => product.id === stockForm.productId);
+  const largeChangeThreshold = selectedStockProduct
+    ? Math.min(Number(settings.largeChangeThreshold ?? 20), selectedStockProduct.stock / 2)
+    : Number(settings.largeChangeThreshold ?? 20);
+  const largeChange = Number(stockForm.quantity) > 0
+    && Number(stockForm.quantity) >= largeChangeThreshold;
+  const needsStockNote = stockForm.reasonText.trim().toLowerCase() === 'other' || largeChange;
   const title = modal.type === 'order' ? `Order ${modal.order.id}` : {
     product: 'Add a product', 'product-image': modal.product?.image ? 'Replace product image' : 'Upload product image', stock: stockForm.reason === 'Adjustment' ? 'Adjust stock' : 'Restock product',
     reject: 'Reject payment proof', proof: 'Payment proof',
@@ -827,9 +909,9 @@ function AppModal({ modal, onClose, onRejectOpen, productForm, setProductForm, s
     {modal.type === 'stock' && <form className="modal-form" onSubmit={onSaveStock}>
       <Field label="Product"><select className="input" required value={stockForm.productId} onChange={(event) => setStockForm({ ...stockForm, productId: event.target.value })}><option value="">Choose a product</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.stock} in stock</option>)}</select></Field>
       <div className="form-grid"><Field label="Movement"><select className="input" value={stockForm.reason} onChange={(event) => setStockForm({ ...stockForm, reason: event.target.value })}><option>Restock</option><option>Adjustment</option></select></Field><Field label={stockForm.reason === 'Adjustment' ? 'Units to remove' : 'Units to add'}><input className="input" type="number" min="1" required value={stockForm.quantity} onChange={(event) => setStockForm({ ...stockForm, quantity: event.target.value })} /></Field></div>
-      <Field label="Reason"><input className="input" required placeholder="e.g. Supplier delivery" value={stockForm.reasonText} onChange={(event) => setStockForm({ ...stockForm, reasonText: event.target.value })} /></Field>
-      <Field label="Note (optional)"><input className="input" value={stockForm.note} onChange={(event) => setStockForm({ ...stockForm, note: event.target.value })} /></Field>
-      {Number(stockForm.quantity) >= 50 && <label className="field"><span>Large-change confirmation</span><input type="checkbox" checked={stockForm.confirmLargeChange} onChange={(event) => setStockForm({ ...stockForm, confirmLargeChange: event.target.checked })} /> Confirm this change is 50 units or more.</label>}
+      <Field label="Reason"><input className="input" required placeholder="e.g. Supplier delivery or Other" value={stockForm.reasonText} onChange={(event) => setStockForm({ ...stockForm, reasonText: event.target.value })} /></Field>
+      <Field label={needsStockNote ? 'Note (required)' : 'Note (optional)'}><input className="input" required={needsStockNote} value={stockForm.note} onChange={(event) => setStockForm({ ...stockForm, note: event.target.value })} /></Field>
+      {largeChange && <label className="field"><span>Large-change confirmation</span><input type="checkbox" checked={stockForm.confirmLargeChange} onChange={(event) => setStockForm({ ...stockForm, confirmLargeChange: event.target.checked })} /> ! Large change — confirm this stock change.</label>}
       <div className="inline-info"><span className="info-mark">i</span><span>This change will be added to your stock movement history.</span></div><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" aria-label={stockForm.reason === 'Adjustment' ? 'Adjust stock' : 'Restock'} loading={savingStock}>{stockForm.reason === 'Adjustment' ? 'Adjust stock' : 'Restock'}</Button></div>
     </form>}
     {modal.type === 'reject' && <div className="modal-form"><p className="modal-description">Let {modal.order.customer} know what needs to be corrected. They can submit new payment proof once you reject this one.</p><Field label="Reason for rejection"><textarea className="input textarea" autoFocus placeholder="e.g. The amount on the screenshot doesn't match the order total." value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} /></Field><div className="modal-actions"><Button variant="secondary" onClick={onClose}>Go back</Button><Button variant="danger" aria-label="Reject payment proof" disabled={!rejectReason.trim()} onClick={async () => { await onReject(modal.order); }}>Reject payment proof</Button></div></div>}

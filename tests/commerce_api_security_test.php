@@ -279,6 +279,104 @@ try {
     $ownerA = $createUser('owner', 'owner-a');
     $ownerB = $createUser('owner', 'owner-b');
 
+    $customerOtherSession = new ApiTestClient($baseUrl, $customer->email, $password, $cookieFiles);
+    $customerOtherSession->login();
+    $passwordPayload = [
+        'currentPassword' => $password,
+        'password' => bin2hex(random_bytes(18)),
+        'confirmPassword' => '',
+    ];
+    $passwordPayload['confirmPassword'] = $passwordPayload['password'];
+    $missingPasswordCsrf = $customer->request(
+        'POST',
+        '/api/v1/account/password',
+        $passwordPayload,
+        false
+    );
+    $assert($missingPasswordCsrf['status'] === 403, 'Password changes must reject a missing CSRF token.');
+    $weakPassword = $customer->request('POST', '/api/v1/account/password', [
+        'currentPassword' => $password,
+        'password' => 'short',
+        'confirmPassword' => 'short',
+    ]);
+    $assert($weakPassword['status'] === 422, 'Password changes must reject passwords below the registration minimum.');
+    $samePassword = $customer->request('POST', '/api/v1/account/password', [
+        'currentPassword' => $password,
+        'password' => $password,
+        'confirmPassword' => $password,
+    ]);
+    $assert($samePassword['status'] === 422, 'Password changes must reject the current password as the new password.');
+    $wrongCurrentPassword = $customer->request('POST', '/api/v1/account/password', [
+        'currentPassword' => 'incorrect-current-password',
+        'password' => $passwordPayload['password'],
+        'confirmPassword' => $passwordPayload['password'],
+    ]);
+    $assert($wrongCurrentPassword['status'] === 422, 'Password changes must reject an incorrect current password.');
+
+    $customerPasswordChange = $customer->request('POST', '/api/v1/account/password', $passwordPayload);
+    $assert($customerPasswordChange['status'] === 200, 'A customer must be able to change a password while signed in.');
+    $customerSessionAfterChange = $customer->request('GET', '/api/auth/session.php');
+    $customerOldSession = $customerOtherSession->request('GET', '/api/auth/session.php');
+    $assert(
+        ($customerSessionAfterChange['json']['user']['role'] ?? null) === 'customer'
+            && ($customerOldSession['json']['user'] ?? null) === null,
+        'A password change must preserve the current customer session and end other sessions.'
+    );
+    $changedCustomerHash = $pdo->prepare('SELECT password_hash FROM users WHERE id = :id');
+    $changedCustomerHash->execute(['id' => $userIds[0]]);
+    $customerHash = (string) $changedCustomerHash->fetchColumn();
+    $assert(
+        str_starts_with($customerHash, '$argon2id$') && password_verify($passwordPayload['password'], $customerHash),
+        'A changed customer password must be stored as an Argon2id hash.'
+    );
+    $customerAudit = $pdo->prepare(
+        "SELECT COUNT(*) FROM audit_log
+         WHERE user_id = :user_id AND action = 'account.password_changed' AND entity_id = :entity_id"
+    );
+    $customerAudit->execute(['user_id' => $userIds[0], 'entity_id' => (string) $userIds[0]]);
+    $assert((int) $customerAudit->fetchColumn() === 1, 'A successful customer password change must be audited.');
+
+    for ($attempt = 1; $attempt <= 5; $attempt++) {
+        $newPassword = bin2hex(random_bytes(18));
+        $limitedPassword = $otherCustomer->request('POST', '/api/v1/account/password', [
+            'currentPassword' => 'incorrect-current-password',
+            'password' => $newPassword,
+            'confirmPassword' => $newPassword,
+        ]);
+        $expectedStatus = $attempt === 5 ? 429 : 422;
+        $assert(
+            $limitedPassword['status'] === $expectedStatus,
+            'Password-change rate limiting must activate after five failed current-password attempts.'
+        );
+    }
+    $blockedNewPassword = bin2hex(random_bytes(18));
+    $blockedPasswordChange = $otherCustomer->request('POST', '/api/v1/account/password', [
+        'currentPassword' => $password,
+        'password' => $blockedNewPassword,
+        'confirmPassword' => $blockedNewPassword,
+    ]);
+    $assert($blockedPasswordChange['status'] === 429, 'A blocked password-change account must remain rate-limited.');
+
+    $ownerPasswordPayload = [
+        'currentPassword' => $password,
+        'password' => bin2hex(random_bytes(18)),
+    ];
+    $ownerPasswordPayload['confirmPassword'] = $ownerPasswordPayload['password'];
+    $ownerPasswordChange = $ownerA->request('POST', '/api/v1/account/password', $ownerPasswordPayload);
+    $ownerSessionAfterChange = $ownerA->request('GET', '/api/auth/session.php');
+    $assert(
+        $ownerPasswordChange['status'] === 200
+            && ($ownerSessionAfterChange['json']['user']['role'] ?? null) === 'owner',
+        'An owner must be able to change a password and keep the current session.'
+    );
+    $ownerPasswordHash = $pdo->prepare('SELECT password_hash FROM users WHERE id = :id');
+    $ownerPasswordHash->execute(['id' => $userIds[2]]);
+    $ownerHash = (string) $ownerPasswordHash->fetchColumn();
+    $assert(
+        str_starts_with($ownerHash, '$argon2id$') && password_verify($ownerPasswordPayload['password'], $ownerHash),
+        'A changed owner password must be stored as an Argon2id hash.'
+    );
+
     $customerSettings = $customer->request('GET', '/api/v1/owner/settings');
     $assert($customerSettings['status'] === 403, 'Customers must not read owner settings.');
     $ownerSettings = $ownerA->request('GET', '/api/v1/owner/settings');
@@ -334,7 +432,7 @@ try {
     $setting = $pdo->prepare('SELECT setting_value FROM settings WHERE setting_key = :key');
     foreach ([
         'cod_enabled', 'cash_pickup_enabled', 'delivery_fee', 'gcash_qr_path', 'shop_hours',
-        'shop_open_override', 'shop_closed_message', 'accept_orders_when_closed',
+        'shop_open_override', 'shop_closed_message', 'accept_orders_when_closed', 'large_change_threshold',
     ] as $settingKey) {
         $setting->execute(['key' => $settingKey]);
         $settingsBefore[$settingKey] = $setting->fetchColumn();
@@ -347,10 +445,28 @@ try {
         ['deliveryFee' => -1],
         ['gcashEnabled' => 'false'],
         ['autoCancelHours' => 721],
+        ['largeChangeThreshold' => 0],
+        ['largeChangeThreshold' => 100001],
     ] as $invalidValues) {
         $invalidSettingsResponse = $ownerA->request('PATCH', '/api/v1/owner/settings', $invalidValues);
         $assert($invalidSettingsResponse['status'] === 422, 'Owner settings must reject invalid field values.');
     }
+    $settingsAudit = $pdo->prepare("SELECT COUNT(*) FROM audit_log WHERE user_id = :user_id AND action = 'settings.updated'");
+    $settingsAudit->execute(['user_id' => $userIds[2]]);
+    $settingsAuditBefore = (int) $settingsAudit->fetchColumn();
+    $largeThresholdBaseline = $ownerA->request('PATCH', '/api/v1/owner/settings', ['largeChangeThreshold' => 20]);
+    $largeThresholdRead = $ownerA->request('GET', '/api/v1/owner/settings');
+    $largeThresholdUpdate = $ownerA->request('PATCH', '/api/v1/owner/settings', ['largeChangeThreshold' => 7]);
+    $largeThresholdSaved = $ownerA->request('GET', '/api/v1/owner/settings');
+    $largeThresholdReset = $ownerA->request('PATCH', '/api/v1/owner/settings', ['largeChangeThreshold' => 20]);
+    $assert(
+        $largeThresholdBaseline['status'] === 200
+            && (int) ($largeThresholdRead['json']['settings']['largeChangeThreshold'] ?? 0) === 20
+            && $largeThresholdUpdate['status'] === 200
+            && (int) ($largeThresholdSaved['json']['settings']['largeChangeThreshold'] ?? 0) === 7
+            && $largeThresholdReset['status'] === 200,
+        'Owner settings must expose and persist the configured large-change threshold.'
+    );
     $disableCod = $ownerA->request('PATCH', '/api/v1/owner/settings', ['codEnabled' => false]);
     $publicSettings = new ApiTestClient($baseUrl, '', '', $cookieFiles);
     $publicSettingsResult = $publicSettings->request('GET', '/api/v1/settings/public', null, false);
@@ -361,9 +477,9 @@ try {
     $assert($disabledCodOrder['status'] === 409, 'Checkout must reject a payment method disabled in owner settings.');
     $enableCod = $ownerA->request('PATCH', '/api/v1/owner/settings', ['codEnabled' => true]);
     $assert($enableCod['status'] === 200, 'Owner settings must continue accepting enabled payment options.');
-    $settingsAudit = $pdo->prepare("SELECT COUNT(*) FROM audit_log WHERE user_id = :user_id AND action = 'settings.updated'");
     $settingsAudit->execute(['user_id' => $userIds[2]]);
-    $assert((int) $settingsAudit->fetchColumn() === 2, 'Owner settings updates must be audited.');
+    $assert((int) $settingsAudit->fetchColumn() - $settingsAuditBefore === 5,
+        'Each successful owner settings update, including threshold changes, must be audited.');
 
     $pdo->prepare("DELETE FROM settings WHERE setting_key = 'accept_orders_when_closed'")->execute();
     $defaultClosedOrdering = $publicSettings->request('GET', '/api/v1/settings/public', null, false);
@@ -791,7 +907,8 @@ try {
     $lowStockBeforeA = $lowStockCount($userIds[2]);
     $lowStockBeforeB = $lowStockCount($userIds[3]);
     $restock = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
-        'productId' => $productId, 'quantity' => 6, 'type' => 'restock', 'reason' => $stockTestNote,
+        'productId' => $productId, 'quantity' => 6, 'type' => 'restock',
+        'reason' => $stockTestNote, 'note' => 'Initial low-stock fixture.', 'confirmedLargeChange' => true,
     ]);
     $firstThresholdCrossing = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
         'productId' => $productId, 'quantity' => -1, 'type' => 'adjustment', 'reason' => $stockTestNote,
@@ -809,7 +926,8 @@ try {
         'Crossing the low-stock threshold must notify each owner once, not repeatedly while below it.'
     );
     $resetThreshold = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
-        'productId' => $productId, 'quantity' => 2, 'type' => 'restock', 'reason' => $stockTestNote,
+        'productId' => $productId, 'quantity' => 2, 'type' => 'restock',
+        'reason' => $stockTestNote, 'note' => 'Reset low-stock threshold.', 'confirmedLargeChange' => true,
     ]);
     $crossThresholdAgain = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
         'productId' => $productId, 'quantity' => -1, 'type' => 'adjustment', 'reason' => $stockTestNote,
@@ -825,31 +943,94 @@ try {
         'productId' => $productId, 'quantity' => 1, 'type' => 'restock', 'reason' => '',
     ]);
     $assert($missingReason['status'] === 422, 'Every stock change must require a reason.');
-    $largeWithoutConfirmation = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
-        'productId' => $productId, 'quantity' => 50, 'type' => 'restock', 'reason' => 'Bulk supplier delivery',
+    $routineAdjustment = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
+        'productId' => $productId, 'quantity' => -2, 'type' => 'adjustment', 'reason' => 'Routine adjustment',
     ]);
-    $assert($largeWithoutConfirmation['status'] === 422,
-        'Large stock changes of 50 units or more must require confirmation.');
+    $assert($routineAdjustment['status'] === 200,
+        'A below-threshold movement with a normal reason must not require a note or large-change confirmation.');
+    $otherWithoutNote = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
+        'productId' => $productId, 'quantity' => -1, 'type' => 'adjustment', 'reason' => 'Other',
+    ]);
+    $assert($otherWithoutNote['status'] === 422, 'The Other stock reason must require a note even when the change is not large.');
+    $largeWithoutNote = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
+        'productId' => $productId, 'quantity' => -2, 'type' => 'adjustment', 'reason' => 'Threshold check',
+    ]);
+    $assert($largeWithoutNote['status'] === 422, 'Large changes must require a note.');
+    $largeWithoutConfirmation = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
+        'productId' => $productId, 'quantity' => -2, 'type' => 'adjustment',
+        'reason' => 'Other', 'note' => '=HYPERLINK("https://example.test","open")',
+    ]);
+    $assert($largeWithoutConfirmation['status'] === 422, 'Large changes must require explicit confirmation.');
     $archiveBefore = $pdo->prepare(
         'SELECT COUNT(*) FROM stock_change_archives WHERE product_id = :product_id'
     );
     $archiveBefore->execute(['product_id' => $productId]);
     $archiveBeforeCount = (int) $archiveBefore->fetchColumn();
     $largeConfirmed = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
-        'productId' => $productId, 'quantity' => 50, 'type' => 'restock',
-        'reason' => 'Bulk supplier delivery', 'confirmedLargeChange' => true,
+        'productId' => $productId, 'quantity' => 2, 'type' => 'restock',
+        'reason' => 'Other', 'note' => '=HYPERLINK("https://example.test","open")',
+        'confirmedLargeChange' => true,
     ]);
     $archiveCount = $pdo->prepare(
         'SELECT COUNT(*) FROM stock_change_archives WHERE product_id = :product_id'
     );
     $archiveCount->execute(['product_id' => $productId]);
+    $archiveAfterCount = (int) $archiveCount->fetchColumn();
     $assert(
         $largeConfirmed['status'] === 200
-            && (int) $archiveCount->fetchColumn() === $archiveBeforeCount + 1,
+            && $archiveAfterCount === $archiveBeforeCount + 1,
         'Confirmed large stock changes must write both a movement and archive record; status='
             . $largeConfirmed['status'] . ' body=' . $largeConfirmed['body']
-            . ' archive=' . (int) $archiveCount->fetchColumn()
+            . ' archive=' . $archiveAfterCount
     );
+    $archiveDateQuery = $pdo->prepare(
+        'SELECT DATE_FORMAT(MAX(created_at), "%Y-%m-%d") FROM stock_change_archives WHERE product_id = :product_id'
+    );
+    $archiveDateQuery->execute(['product_id' => $productId]);
+    $archiveDate = (string) $archiveDateQuery->fetchColumn();
+    $archiveFilters = http_build_query([
+        'productId' => (string) $productId,
+        'type' => 'restock',
+        'reason' => 'Other',
+        'from' => $archiveDate,
+        'to' => $archiveDate,
+        'largeOnly' => '1',
+    ]);
+    $filteredArchive = $ownerA->request('GET', '/api/v1/owner/inventory/archives?' . $archiveFilters);
+    $filteredRows = $filteredArchive['json']['archives'] ?? [];
+    $assert(
+        $filteredArchive['status'] === 200
+            && count($filteredRows) === 1
+            && ($filteredRows[0]['type'] ?? '') === 'restock'
+            && ($filteredRows[0]['reason'] ?? '') === 'Other'
+            && ($filteredRows[0]['note'] ?? '') === '=HYPERLINK("https://example.test","open")'
+            && ($filteredRows[0]['large'] ?? false) === true,
+        'Stock archive filters must match product, movement type, reason, date range, and large-only flag.'
+    );
+    $csvFormula = "\t=HYPERLINK(\"https://example.test\",\"open\")";
+    $pdo->prepare('UPDATE stock_change_archives SET note = :note WHERE movement_id = :movement_id')
+        ->execute(['note' => $csvFormula, 'movement_id' => $filteredRows[0]['movementId']]);
+    $filteredCsv = $ownerA->request('GET', '/api/v1/owner/inventory/archives.csv?' . $archiveFilters);
+    $csvLines = explode("\n", trim(substr($filteredCsv['body'], 3)));
+    $csvRow = str_getcsv($csvLines[1] ?? '');
+    $assert(
+        $filteredCsv['status'] === 200
+            && ($csvRow[6] ?? null) === "'" . $csvFormula,
+        'Stock archive CSV must prefix formulas preceded by a control-space character with an apostrophe.'
+    );
+    $unarchivedMovementCount = $pdo->prepare(
+            'SELECT COUNT(*) FROM stock_movements sm
+             LEFT JOIN stock_change_archives a ON a.movement_id = sm.id
+             WHERE sm.product_id = :product_id AND sm.id > :start_id
+               AND sm.actor_user_id = :owner_id AND sm.order_id IS NULL AND a.id IS NULL'
+    );
+    $unarchivedMovementCount->execute([
+            'product_id' => $productId,
+            'start_id' => $testMovementStartId,
+            'owner_id' => $userIds[2],
+    ]);
+    $assert((int) $unarchivedMovementCount->fetchColumn() === 0,
+            'Every manual owner stock movement must have a matching archive record.');
 
     $pdo->prepare('INSERT INTO cart_items (user_id, product_id, qty) VALUES (:user_id, :product_id, 1)')
         ->execute(['user_id' => $userIds[0], 'product_id' => $productId]);
@@ -1054,6 +1235,8 @@ try {
         'quantity' => 4,
         'type' => 'restock',
         'reason' => 'Parallel restock test',
+        'note' => 'Parallel restock test note.',
+        'confirmedLargeChange' => true,
     ];
     $stockBefore = (int) $pdo->query("SELECT stock FROM products WHERE id = {$productId}")->fetchColumn();
     $movementsBefore = (int) $pdo->query("SELECT COUNT(*) FROM stock_movements WHERE product_id = {$productId}")->fetchColumn();
@@ -1168,14 +1351,14 @@ try {
     $restockAmount = mt_rand(2, 5);
     $randomRestock = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
         'productId' => $productId, 'quantity' => $restockAmount, 'type' => 'restock',
-        'reason' => $stockTestNote, 'note' => 'randomized restock ' . $seed,
+        'reason' => $stockTestNote, 'note' => 'randomized restock ' . $seed, 'confirmedLargeChange' => true,
     ]);
     $assert($randomRestock['status'] === 200, 'Randomized stock invariant restock must succeed.');
     $assertStockInvariant('restock');
     $adjustmentAmount = mt_rand(1, min(3, $startingStock + $restockAmount - 1));
     $randomAdjustment = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
         'productId' => $productId, 'quantity' => -$adjustmentAmount, 'type' => 'adjustment',
-        'reason' => $stockTestNote, 'note' => 'randomized adjustment ' . $seed,
+        'reason' => $stockTestNote, 'note' => 'randomized adjustment ' . $seed, 'confirmedLargeChange' => true,
     ]);
     $assert($randomAdjustment['status'] === 200, 'Randomized stock invariant adjustment must succeed.');
     $assertStockInvariant('adjustment');
@@ -1210,6 +1393,7 @@ try {
         $movement = $ownerA->request('POST', '/api/v1/owner/inventory/movements', [
             'productId' => $productId, 'quantity' => $quantity, 'type' => $isRestock ? 'restock' : 'adjustment',
             'reason' => $stockTestNote, 'note' => 'random operation ' . $seed . '-' . $iteration,
+            'confirmedLargeChange' => true,
         ]);
         $assert($movement['status'] === 200, 'Randomized stock movement ' . $iteration . ' must succeed (seed ' . $seed . ').');
         $assertStockInvariant('random operation ' . $iteration . ' (seed ' . $seed . ')');

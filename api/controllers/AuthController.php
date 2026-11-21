@@ -10,6 +10,8 @@ final class AuthController
     private const MAX_RESENDS_PER_HOUR = 3;
     private const LOGIN_LIMIT = 5;
     private const LOGIN_WINDOW_MINUTES = 15;
+    private const PASSWORD_CHANGE_LIMIT = 5;
+    private const PASSWORD_CHANGE_LOCK_MINUTES = 15;
 
     private static function normalizedEmail(mixed $value): ?string
     {
@@ -508,9 +510,6 @@ final class AuthController
         if ($user === null) {
             json_response(['message' => 'Please log in to continue.'], 401);
         }
-        if ($user['role'] !== 'owner' || empty($_SESSION['must_change_password'])) {
-            json_response(['message' => 'This password-change action is only available for the initial owner setup.'], 403);
-        }
 
         $data = request_json();
         $currentPassword = is_string($data['currentPassword'] ?? null) ? $data['currentPassword'] : '';
@@ -522,27 +521,97 @@ final class AuthController
         }
 
         $db = auth_db();
-        $find = $db->prepare('SELECT password_hash FROM users WHERE id = :id LIMIT 1');
-        $find->execute(['id' => $user['id']]);
-        $passwordHash = $find->fetchColumn();
-        if (!is_string($passwordHash) || !password_verify($currentPassword, $passwordHash)) {
-            json_response(['message' => 'The current password is incorrect.'], 422);
-        }
-        if (password_verify($password, $passwordHash)) {
-            json_response(['message' => 'Choose a password different from your current password.'], 422);
+        $db->beginTransaction();
+        try {
+            $find = $db->prepare(
+                'SELECT password_hash, failed_attempts, locked_until
+                 FROM users WHERE id = :id LIMIT 1 FOR UPDATE'
+            );
+            $find->execute(['id' => $user['id']]);
+            $account = $find->fetch();
+            if (!$account || !is_string($account['password_hash'])) {
+                $db->rollBack();
+                json_response(['message' => 'Please log in to continue.'], 401);
+            }
+
+            $lockedUntil = $account['locked_until'];
+            if (is_string($lockedUntil) && strtotime($lockedUntil . ' UTC') > time()) {
+                $db->rollBack();
+                json_response([
+                    'message' => 'Too many incorrect current-password attempts. Try again in '
+                        . self::PASSWORD_CHANGE_LOCK_MINUTES . ' minutes.',
+                ], 429);
+            }
+
+            $passwordHash = $account['password_hash'];
+            if (!password_verify($currentPassword, $passwordHash)) {
+                // This per-user lock does not use or alter login_attempts.
+                $windowExpired = is_string($lockedUntil) && strtotime($lockedUntil . ' UTC') <= time();
+                $attempts = $windowExpired
+                    ? 1
+                    : min(255, (int) $account['failed_attempts'] + 1);
+                $blocked = $attempts >= self::PASSWORD_CHANGE_LIMIT;
+                $recordFailure = $db->prepare(
+                    'UPDATE users
+                     SET failed_attempts = :attempts,
+                         locked_until = IF(:blocked = 1,
+                             DATE_ADD(UTC_TIMESTAMP(), INTERVAL ' . self::PASSWORD_CHANGE_LOCK_MINUTES . ' MINUTE), NULL)
+                     WHERE id = :id'
+                );
+                $recordFailure->execute([
+                    'attempts' => $attempts,
+                    'blocked' => $blocked ? 1 : 0,
+                    'id' => $user['id'],
+                ]);
+                $db->commit();
+                if ($blocked) {
+                    json_response([
+                        'message' => 'Too many incorrect current-password attempts. Try again in '
+                            . self::PASSWORD_CHANGE_LOCK_MINUTES . ' minutes.',
+                    ], 429);
+                }
+                json_response(['message' => 'The current password is incorrect.'], 422);
+            }
+
+            if (password_verify($password, $passwordHash)) {
+                $db->rollBack();
+                json_response(['message' => 'Choose a password different from your current password.'], 422);
+            }
+
+            $update = $db->prepare(
+                'UPDATE users
+                 SET password_hash = :password_hash, must_change_password = 0,
+                     session_version = session_version + 1, failed_attempts = 0, locked_until = NULL
+                 WHERE id = :id'
+            );
+            $update->execute(['password_hash' => hash_password($password), 'id' => $user['id']]);
+            $version = $db->prepare('SELECT session_version FROM users WHERE id = :id');
+            $version->execute(['id' => $user['id']]);
+            $newSessionVersion = (int) $version->fetchColumn();
+
+            $audit = $db->prepare(
+                'INSERT INTO audit_log (user_id, action, entity, entity_id, details, ip)
+                 VALUES (:user_id, :action, :entity, :entity_id, :details, :ip)'
+            );
+            $audit->execute([
+                'user_id' => $user['id'],
+                'action' => 'account.password_changed',
+                'entity' => 'user',
+                'entity_id' => (string) $user['id'],
+                'details' => json_encode(['role' => $user['role']], JSON_THROW_ON_ERROR),
+                'ip' => filter_var($_SERVER['REMOTE_ADDR'] ?? null, FILTER_VALIDATE_IP) ?: null,
+            ]);
+            $db->commit();
+        } catch (Throwable $exception) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $exception;
         }
 
-        $update = $db->prepare(
-            'UPDATE users
-             SET password_hash = :password_hash, must_change_password = 0,
-                 session_version = session_version + 1
-             WHERE id = :id'
-        );
-        $update->execute(['password_hash' => hash_password($password), 'id' => $user['id']]);
-        $version = $db->prepare('SELECT session_version FROM users WHERE id = :id');
-        $version->execute(['id' => $user['id']]);
-        $_SESSION['session_version'] = (int) $version->fetchColumn();
+        $_SESSION['session_version'] = $newSessionVersion;
         $_SESSION['must_change_password'] = false;
+        $_SESSION['last_activity'] = time();
         session_regenerate_id(true);
         json_response(['message' => 'Your password has been changed.']);
     }

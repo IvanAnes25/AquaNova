@@ -1,8 +1,25 @@
-# Aquatica implementation test report — Batch B verification 2026-11-19
+# AquaNova implementation test report
 
 ## Release status
 
-**Batch B items 11–12: DONE. Overall release: NOT DONE — not ready for hosting.** Batch B’s shop hours/status, closed-order policy, grouped notifications, mobile header cleanup, and validation are complete. Broader release checks remain incomplete, including actual browser zoom/Lighthouse navigation audits and host-specific verification.
+**Batch D items 5, 6, 7, 8, and 10: DONE. Batch B items 11–12: DONE. Overall release: NOT DONE — not ready for hosting.** Broader release checks remain incomplete, including actual browser zoom/Lighthouse navigation audits and host-specific verification.
+
+## Batch D final verification
+
+All database-backed tests used only `aquanova_test_20261114_074204_c39ae8`, with both `DB_NAME` and `AQUATICA_TEST_DB_NAME` pinned to that database. The real `aquanova` database was not used. No migration was added for Batch D.
+
+| Suite | Final result |
+|---|---|
+| Production build (`npm run build`) | PASS — root and webapp Vite builds |
+| Fulfillment wording | PASS — 40 assertions |
+| Commerce schema | PASS — 69 assertions |
+| Commerce auto-cancel | PASS — 25 assertions |
+| Commerce reports | PASS — 36 assertions |
+| Commerce API security | PASS — 192 assertions |
+| Auth registration and verification | PASS — 9 assertions |
+| Playwright end-to-end (`npm run test:e2e`) | PASS — 22/22 tests (2.6m) |
+
+Batch D coverage includes authenticated password changes, stock-change thresholds and confirmation, stock archive filtering/export and product history, sold-out behavior, same-order next steps and actionable-order selection, and explicit waits for the second approval request. Playwright now derives `DB_NAME` from the required isolated database name, rejects a conflicting value, and only reuses an API server that confirms the expected database. A targeted browser test passed with `DB_NAME` unset; mismatch preflights were rejected. PHP emitted duplicate module-load warnings; they did not fail tests. No migration command is required.
 
 ## Batch B final verification — 2026-11-19
 
@@ -109,7 +126,7 @@ All mutating backend suites in this report used the isolated database `aquanova_
 |---|---|---|
 | (b) Authentication and roles | PASS (isolated local test) | Registration and email verification passed 3 consecutive times through the local SMTP catcher (9 assertions each). Login behavior was not changed. |
 | (c) Catalog and cart | PASS (isolated live API) | Playwright uses the real PHP API and isolated database; the customer cart survives refresh. |
-| (d) Orders and checkout | PASS (isolated live API) | The final 18-test browser suite covers GCash, COD, pickup cash, cancellation/stock handling, and closed-order policy behavior. |
+| (d) Orders and checkout | PASS (isolated live API) | The final 22-test browser suite covers GCash, COD, pickup cash, cancellation/stock handling, and closed-order policy behavior. |
 | (e) GCash proof payment | PASS (isolated live API) | Live browser flow covers rejection with reason, duplicate-reference rejection, re-upload, approval, stock deducted once, next-order selection, Ready, and Completed. |
 | (f) Owner Orders inbox | PASS (isolated live API) | Real-data browser flows cover the order tabs, actions, and automatic next-order selection. Responsive rendering passes at tested widths. |
 | (g) Inventory | PASS (isolated API) | Stock changes require reasons, changes of 50 units or more require confirmation and write an archive, and randomized stock-to-log invariant passed. Owner Playwright coverage uploads, replaces, and removes a product image. |
@@ -127,10 +144,10 @@ All mutating backend suites in this report used the isolated database `aquanova_
 | `php tests\commerce_schema_test.php` | PASS — `Commerce schema tests passed (69 assertions).` |
 | `php tests\commerce_auto_cancel_test.php` | PASS — `Commerce auto-cancel tests passed (25 assertions).` |
 | `php tests\commerce_reports_test.php` | PASS — `Commerce reports tests passed (36 assertions).` |
-| `php -d extension=gd tests\commerce_api_security_test.php` | PASS — `Commerce API security tests passed (167 assertions).` Ran against both isolated loopback API test routers. |
+| `php -d extension=gd tests\commerce_api_security_test.php` | PASS — `Commerce API security tests passed (192 assertions).` Ran against both isolated loopback API test routers. |
 | `php tests\auth_registration_verification_test.php` | PASS — 9 assertions through the local SMTP catcher. |
 | `npm run build` | PASS — both root and webapp Vite production builds completed. |
-| `npm run test:e2e` | PASS — 18/18 Playwright tests passed (2.4 min) against the isolated database. |
+| `npm run test:e2e` | PASS — 22/22 Playwright tests passed (2.6 min) against the isolated database. |
 | `php -l` on changed PHP files and PHP test/router files | PASS — no syntax errors. |
 | `git diff --check` | PASS — no whitespace errors. |
 | Isolated database backup/restore | PASS — separate restore database matched all 17 tables, table row counts, schema dump hash, and data dump hash; the restore database and temporary dump were removed. |
